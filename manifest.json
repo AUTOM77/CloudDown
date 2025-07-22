@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "CloudDown",
     "version": "1.0.0",
-    "description": "Cyberpunk-style batch download for Quark Drive",
+    "description": "Download Tools for Cloud Drive",
     "permissions": [
         "activeTab",
         "downloads"
