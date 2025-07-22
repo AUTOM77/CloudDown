@@ -1,0 +1,43 @@
+{
+    "manifest_version": 3,
+    "name": "CloudDown",
+    "version": "1.0.0",
+    "description": "Cyberpunk-style batch download for Quark Drive",
+    "permissions": [
+        "activeTab",
+        "downloads"
+    ],
+    "host_permissions": [
+        "https://drive-pc.quark.cn/*",
+        "https://pan.quark.cn/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://pan.quark.cn/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "css": [
+                "style.css"
+            ],
+            "run_at": "document_idle",
+            "all_frames": false
+        }
+    ],
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "action": {
+        "default_title": "CloudDown",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
+    },
+    "minimum_chrome_version": "88"
+}
