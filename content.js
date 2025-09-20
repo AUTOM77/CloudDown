@@ -1,152 +1,8 @@
 (() => {
     "use strict";
 
-    class QuarkDownloader {
-        constructor(options = {}) {
-            this.concurrency = options.concurrency || 3;
-            this.retryAttempts = options.retryAttempts || 3;
-            this.retryDelay = options.retryDelay || 1000;
-            this.queue = [];
-            this.activeDownloads = new Map();
-            this.completed = [];
-            this.failed = [];
-            this.abortController = null;
-            this.progress = {
-                total: 0,
-                completed: 0,
-                failed: 0,
-                inProgress: 0
-            };
-        }
-
-        async downloadBatch(fids, updateCallback) {
-            this.queue = [...fids];
-            this.progress.total = fids.length;
-            this.completed = [];
-            this.failed = [];
-            this.abortController = new AbortController();
-
-            const downloadPromises = [];
-            for (let i = 0; i < Math.min(this.concurrency, fids.length); i++) {
-                downloadPromises.push(this.processQueue(updateCallback));
-            }
-
-            await Promise.all(downloadPromises);
-            return {
-                completed: this.completed,
-                failed: this.failed,
-                summary: this.progress
-            };
-        }
-
-        async processQueue(updateCallback) {
-            while (this.queue.length > 0 && !this.abortController.signal.aborted) {
-                const fid = this.queue.shift();
-                if (!fid) break;
-
-                this.progress.inProgress++;
-                if (updateCallback) {
-                    updateCallback(this.progress);
-                }
-
-                const result = await this.downloadFileWithRetry(fid);
-
-                this.progress.inProgress--;
-                if (result.success) {
-                    this.completed.push(fid);
-                    this.progress.completed++;
-                } else {
-                    this.failed.push({ fid, error: result.error });
-                    this.progress.failed++;
-                }
-
-                if (updateCallback) {
-                    updateCallback(this.progress);
-                }
-            }
-        }
-
-        async downloadFileWithRetry(fid) {
-            let attempts = 0;
-            while (attempts < this.retryAttempts) {
-                attempts++;
-                try {
-                    await this.downloadFile(fid);
-                    return { success: true, fid };
-                } catch (error) {
-                    if (error.name === "AbortError") {
-                        return { success: false, fid, error: "Aborted" };
-                    }
-                    console.error(`[CloudDown] Download attempt ${attempts}/${this.retryAttempts} failed for ${fid}:`, error);
-                    if (attempts < this.retryAttempts) {
-                        await this.sleep(this.retryDelay * attempts);
-                    } else {
-                        return { success: false, fid, error: error.message };
-                    }
-                }
-            }
-        }
-
-        async downloadFile(fid) {
-            const response = await fetch(
-                "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
-                {
-                    headers: {
-                        "accept": "application/json, text/plain, */*",
-                        "accept-language": "en,en-US;q=0.9",
-                        "cache-control": "no-cache",
-                        "content-type": "application/json;charset=UTF-8",
-                        "pragma": "no-cache",
-                        "priority": "u=1, i",
-                        "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-                        "sec-ch-ua-mobile": "?0",
-                        "sec-ch-ua-platform": '"macOS"',
-                        "sec-fetch-dest": "empty",
-                        "sec-fetch-mode": "cors",
-                        "sec-fetch-site": "same-site"
-                    },
-                    referrer: "https://pan.quark.cn/",
-                    body: JSON.stringify({ fids: [fid] }),
-                    method: "POST",
-                    mode: "cors",
-                    credentials: "include",
-                    signal: this.abortController.signal
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (data.data && data.data[0]) {
-                const item = data.data[0];
-                if (item.download_url && item.file_name) {
-                    const a = document.createElement("a");
-                    a.href = item.download_url;
-                    a.download = item.file_name;
-                    a.style.display = "none";
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    await this.sleep(300);
-                }
-            }
-        }
-
-        sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-        abort() {
-            if (this.abortController) {
-                this.abortController.abort();
-            }
-        }
-    }
-
     let isDownloading = false;
-    let currentDownloader = null;
+    let abortController = null;
 
     function injectButton() {
         const targetElement = document.querySelector(".SectionHeaderController--icon-download--1Z-OAHd");
@@ -199,64 +55,183 @@
 
     async function handleBatchDownload() {
         if (isDownloading) {
-            const stopDownload = window.confirm("正在下载中，是否停止当前下载？");
-            if (stopDownload && currentDownloader) {
-                currentDownloader.abort();
-                isDownloading = false;
-                resetButton();
-                showNotification("下载已停止");
-            }
+            showNotification("CloudDown 正在下载中，请稍候...");
             return;
         }
 
         const button = document.querySelector("#batch-download-btn");
-        const originalContent = button.innerHTML;
+        const buttonContent = button.cloneNode(true);
 
         try {
             isDownloading = true;
+            abortController = new AbortController();
 
-            updateButton("正在加载...", true);
-            await loadAllPages();
+            updateButton("正在获取文件列表...", true);
 
-            const fids = Array.from(document.querySelectorAll("tr.ant-table-row[data-row-key]"))
-                .map(row => row.getAttribute("data-row-key"))
-                .filter(fid => fid && fid.trim());
+            // Use API to get complete file list
+            const fids = await getAllFilesViaAPI();
 
             if (fids.length === 0) {
                 showNotification("未找到可下载的文件");
                 return;
             }
 
-            const options = await showDownloadOptions(fids.length);
-            if (!options) {
-                resetButton(originalContent);
+            const confirmed = window.confirm(`确定要下载 ${fids.length} 个文件吗？`);
+            if (!confirmed) {
+                resetButton(buttonContent);
                 isDownloading = false;
                 return;
             }
 
-            currentDownloader = new QuarkDownloader({
-                concurrency: options.concurrency,
-                retryAttempts: options.retryAttempts,
-                retryDelay: 1000
-            });
-
-            const updateProgress = (progress) => {
-                const percentage = Math.round((progress.completed + progress.failed) / progress.total * 100);
-                updateButton(`下载中 ${percentage}% (${progress.completed}/${progress.total})`, true);
+            const updateProgress = (current, total) => {
+                button.textContent = "";
+                const svg = createSpinnerSVG();
+                const span = document.createElement("span");
+                span.textContent = `DL ${current}/${total}`;
+                button.appendChild(svg);
+                button.appendChild(span);
             };
 
-            const result = await currentDownloader.downloadBatch(fids, updateProgress);
-            const message = `下载完成！\n✅ 成功: ${result.summary.completed}\n❌ 失败: ${result.summary.failed}`;
-            showNotification(message);
+            // Sequential download like v3.0.0 - more reliable for Quark Drive
+            for (let i = 0; i < fids.length; i++) {
+                if (abortController && abortController.signal.aborted) break;
 
+                updateProgress(i + 1, fids.length);
+
+                try {
+                    await downloadFile(fids[i]);
+                    if (i < fids.length - 1) {
+                        await sleep(1000); // 1 second delay between downloads
+                    }
+                } catch (error) {
+                    if (error.name === "AbortError") {
+                        console.log("[CloudDown] 下载已取消");
+                        break;
+                    }
+                    console.error(`[CloudDown] 下载文件 ${i + 1} 失败:`, error);
+                }
+            }
+
+            resetButton(buttonContent);
+            if (!abortController || !abortController.signal.aborted) {
+                showNotification("CloudDown 批量下载完成！");
+            }
         } catch (error) {
             console.error("[CloudDown] 批量下载错误:", error);
             showNotification("批量下载失败，请查看控制台了解详情");
+            resetButton(buttonContent);
         } finally {
             isDownloading = false;
-            currentDownloader = null;
-            resetButton(originalContent);
+            abortController = null;
         }
+    }
+
+    async function getAllFilesViaAPI() {
+        const allFiles = [];
+        let page = 1;
+        const pageSize = 100; // Fetch more files per request
+        let hasMore = true;
+
+        // Extract folder ID from URL or find it from the page
+        const pdirFid = getCurrentFolderId();
+
+        while (hasMore) {
+            try {
+                const response = await fetch(
+                    `https://drive-pc.quark.cn/1/clouddrive/file/sort?pr=ucpro&fr=pc&uc_param_str=&pdir_fid=${pdirFid}&_page=${page}&_size=${pageSize}&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc`,
+                    {
+                        headers: {
+                            "accept": "application/json, text/plain, */*",
+                            "accept-language": "en,en-US;q=0.9",
+                            "cache-control": "no-cache",
+                            "pragma": "no-cache",
+                            "sec-fetch-dest": "empty",
+                            "sec-fetch-mode": "cors",
+                            "sec-fetch-site": "same-site"
+                        },
+                        referrer: "https://pan.quark.cn/",
+                        method: "GET",
+                        mode: "cors",
+                        credentials: "include"
+                    }
+                );
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.data && data.data.list) {
+                    // Filter for downloadable files (not folders)
+                    const files = data.data.list.filter(item =>
+                        item.file && !item.dir && item.fid
+                    ).map(item => item.fid);
+
+                    allFiles.push(...files);
+                    console.log(`[CloudDown] Page ${page}: Found ${files.length} files, Total: ${allFiles.length}`);
+                }
+
+                // Check if there are more pages
+                if (data.metadata && data.metadata._total) {
+                    const total = data.metadata._total;
+                    hasMore = (page * pageSize) < total;
+                } else {
+                    hasMore = false;
+                }
+
+                page++;
+
+                // Small delay to avoid rate limiting
+                if (hasMore) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
+
+            } catch (error) {
+                console.error(`[CloudDown] Error fetching page ${page}:`, error);
+                hasMore = false;
+            }
+        }
+
+        console.log(`[CloudDown] Total files found via API: ${allFiles.length}`);
+        return allFiles;
+    }
+
+    function getCurrentFolderId() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let folderId = urlParams.get('id');
+
+        if (!folderId) {
+            // Try to extract from current page state or breadcrumb
+            const breadcrumbItems = document.querySelectorAll('.ant-breadcrumb-link');
+            if (breadcrumbItems.length > 0) {
+                const lastItem = breadcrumbItems[breadcrumbItems.length - 1];
+                const href = lastItem.getAttribute('href');
+                if (href) {
+                    const match = href.match(/id=([^&]+)/);
+                    if (match) {
+                        folderId = match[1];
+                    }
+                }
+            }
+        }
+
+        if (!folderId) {
+            const isRoot = window.location.pathname === '/list' && !window.location.search.includes('id=');
+            if (isRoot) {
+                folderId = '0';
+            }
+        }
+
+        if (!folderId) {
+            const firstRow = document.querySelector("tr.ant-table-row[data-row-key]");
+            if (firstRow) {
+                folderId = '0';
+            }
+        }
+
+        console.log(`[CloudDown] Current folder ID: ${folderId || '0'}`);
+        return folderId || '0';
     }
 
     function updateButton(text, showSpinner = false) {
@@ -273,79 +248,60 @@
         button.appendChild(span);
     }
 
-    function resetButton(originalContent) {
-        const button = document.querySelector("#batch-download-btn");
-        if (originalContent) {
-            button.innerHTML = originalContent;
-        } else {
-            updateButton("BATCH_DL");
+    function resetButton(button, buttonContent) {
+        button.textContent = "";
+        button.appendChild(buttonContent.children[0].cloneNode(true));
+        button.appendChild(buttonContent.children[1].cloneNode(true));
+    }
+
+    async function downloadFile(fid) {
+        const response = await fetch(
+            "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
+            {
+                headers: {
+                    "accept": "application/json, text/plain, */*",
+                    "accept-language": "en,en-US;q=0.9",
+                    "cache-control": "no-cache",
+                    "content-type": "application/json;charset=UTF-8",
+                    "pragma": "no-cache",
+                    "priority": "u=1, i",
+                    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"macOS"',
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-site"
+                },
+                referrer: "https://pan.quark.cn/",
+                body: JSON.stringify({ fids: [fid] }),
+                method: "POST",
+                mode: "cors",
+                credentials: "include",
+                signal: abortController ? abortController.signal : undefined
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.data && data.data[0]) {
+            const item = data.data[0];
+            if (item.download_url && item.file_name) {
+                const a = document.createElement("a");
+                a.href = item.download_url;
+                a.download = item.file_name;
+                a.style.display = "none";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
         }
     }
 
-    async function showDownloadOptions(fileCount) {
-        const html = `
-            <div style="padding: 10px;">
-                <h3>批量下载设置</h3>
-                <p>发现 ${fileCount} 个文件</p>
-                <div style="margin: 15px 0;">
-                    <label>并发下载数:
-                        <input type="number" id="dl-concurrency" value="3" min="1" max="10" style="width: 50px; margin-left: 10px;">
-                    </label>
-                </div>
-                <div style="margin: 15px 0;">
-                    <label>重试次数:
-                        <input type="number" id="dl-retry" value="3" min="1" max="5" style="width: 50px; margin-left: 10px;">
-                    </label>
-                </div>
-                <p style="color: #666; font-size: 12px;">提示：并发数越高下载越快，但可能不稳定</p>
-            </div>
-        `;
-
-        const container = document.createElement("div");
-        container.innerHTML = html;
-        container.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            z-index: 10000;
-            min-width: 300px;
-        `;
-
-        const buttonContainer = document.createElement("div");
-        buttonContainer.style.cssText = "text-align: center; margin-top: 20px;";
-
-        const confirmBtn = document.createElement("button");
-        confirmBtn.textContent = "开始下载";
-        confirmBtn.style.cssText = "padding: 8px 20px; margin: 0 10px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;";
-
-        const cancelBtn = document.createElement("button");
-        cancelBtn.textContent = "取消";
-        cancelBtn.style.cssText = "padding: 8px 20px; margin: 0 10px; background: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer;";
-
-        buttonContainer.appendChild(confirmBtn);
-        buttonContainer.appendChild(cancelBtn);
-        container.appendChild(buttonContainer);
-
-        document.body.appendChild(container);
-
-        return new Promise((resolve) => {
-            confirmBtn.onclick = () => {
-                const concurrency = parseInt(document.getElementById("dl-concurrency").value);
-                const retryAttempts = parseInt(document.getElementById("dl-retry").value);
-                document.body.removeChild(container);
-                resolve({ concurrency, retryAttempts });
-            };
-
-            cancelBtn.onclick = () => {
-                document.body.removeChild(container);
-                resolve(null);
-            };
-        });
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     function createSpinnerSVG() {
