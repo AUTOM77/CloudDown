@@ -1,0 +1,81 @@
+name: release
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - "master"
+    paths:
+      - "manifest.json"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Setup Chrome Extension CLI
+      run: |
+        npm install -g chrome-webstore-upload-cli
+
+    - name: Get version from manifest
+      id: version
+      run: |
+        VERSION=$(grep '"version"' manifest.json | cut -d '"' -f 4)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Package extension
+      run: |
+        zip -r CloudDown.zip . -x "*.git*" "*.github*" "update.xml" "README.md"
+
+    - name: Generate CRX file
+      run: |
+        mv CloudDown.zip CloudDown.crx
+
+    - name: Generate update.xml
+      run: |
+        cat > update.xml << EOF
+        <?xml version='1.0' encoding='UTF-8'?>
+        <gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
+          <app appid='YOUR_EXTENSION_ID_HERE'>
+            <updatecheck codebase='https://github.com/AUTOM77/CloudDown/releases/latest/download/CloudDown.crx' version='${{ steps.version.outputs.version }}' />
+          </app>
+        </gupdate>
+        EOF
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        draft: false
+        prerelease: false
+        overwrite_files: true
+        files: |
+          CloudDown.crx
+          update.xml
+        body: |
+          ## CloudDown v${{ steps.version.outputs.version }}
+
+          ### Installation
+          1. Download `CloudDown.crx` from this release
+          2. Open Chrome/Edge and navigate to `chrome://extensions/`
+          3. Enable "Developer mode"
+          4. Drag and drop the CRX file to install
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: extension-package
+        path: |
+          CloudDown.crx
+          update.xml

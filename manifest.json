@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "CloudDown",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "description": "Download Tools for Cloud Drive",
     "permissions": [
         "activeTab",
@@ -39,5 +39,6 @@
             "128": "icons/icon128.png"
         }
     },
-    "minimum_chrome_version": "88"
+    "minimum_chrome_version": "88",
+    "update_url": "https://github.com/AUTOM77/CloudDown/releases/latest/download/update.xml"
 }
