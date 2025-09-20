@@ -135,27 +135,124 @@
 
             resetButton(button, buttonContent);
 
-            // Show download links and options
-            const linksList = downloadLinks.map(link => `${link.name}: ${link.url}`).join('\n');
+            // Format links - just URLs, one per line
+            const linksList = downloadLinks.map(link => link.url).join('\n');
             console.log("[CloudDown] 下载链接列表:\n", linksList);
 
-            // Create a better dialog with options
-            const message = `找到 ${downloadLinks.length} 个文件的下载链接\n\n` +
-                          `选择操作:\n` +
-                          `• 确定 - 开始批量下载\n` +
-                          `• 取消 - 复制链接到控制台（可手动复制）`;
+            // Create a modal dialog
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: white;
+                border-radius: 8px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                z-index: 10000;
+                padding: 20px;
+                max-width: 600px;
+                width: 90%;
+            `;
 
-            const confirmed = window.confirm(message);
+            modal.innerHTML = `
+                <h3 style="margin: 0 0 15px 0; color: #333;">CloudDown - 找到 ${downloadLinks.length} 个文件</h3>
+                <div style="margin-bottom: 15px; color: #666;">
+                    <p>请选择操作:</p>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button id="clouddown-copy" style="
+                        padding: 8px 20px;
+                        background: #f0f0f0;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 14px;
+                    ">复制链接</button>
+                    <button id="clouddown-download" style="
+                        padding: 8px 20px;
+                        background: #4a9eff;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 14px;
+                    ">批量下载</button>
+                    <button id="clouddown-cancel" style="
+                        padding: 8px 20px;
+                        background: #fff;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 14px;
+                    ">取消</button>
+                </div>
+                <div id="clouddown-status" style="margin-top: 10px; color: #4CAF50; display: none;"></div>
+            `;
 
-            if (!confirmed) {
-                // Copy links to clipboard if possible
-                try {
-                    await navigator.clipboard.writeText(linksList);
-                    showNotification("下载链接已复制到剪贴板！");
-                } catch (err) {
-                    console.log("[CloudDown] 无法自动复制，请从控制台手动复制链接");
-                }
-                resetButton(button, buttonContent);
+            // Create overlay
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 9999;
+            `;
+
+            document.body.appendChild(overlay);
+            document.body.appendChild(modal);
+
+            // Wait for user action
+            const userAction = await new Promise((resolve) => {
+                const copyBtn = modal.querySelector('#clouddown-copy');
+                const downloadBtn = modal.querySelector('#clouddown-download');
+                const cancelBtn = modal.querySelector('#clouddown-cancel');
+                const statusDiv = modal.querySelector('#clouddown-status');
+
+                copyBtn.onclick = async () => {
+                    try {
+                        await navigator.clipboard.writeText(linksList);
+                        statusDiv.textContent = '✓ 链接已复制到剪贴板！';
+                        statusDiv.style.display = 'block';
+                        setTimeout(() => {
+                            document.body.removeChild(modal);
+                            document.body.removeChild(overlay);
+                            resolve('copy');
+                        }, 1500);
+                    } catch (err) {
+                        statusDiv.textContent = '复制失败，请查看控制台手动复制';
+                        statusDiv.style.color = '#f44336';
+                        statusDiv.style.display = 'block';
+                        console.log("[CloudDown] 链接列表:\n", linksList);
+                    }
+                };
+
+                downloadBtn.onclick = () => {
+                    document.body.removeChild(modal);
+                    document.body.removeChild(overlay);
+                    resolve('download');
+                };
+
+                cancelBtn.onclick = () => {
+                    document.body.removeChild(modal);
+                    document.body.removeChild(overlay);
+                    resolve('cancel');
+                };
+
+                overlay.onclick = () => {
+                    document.body.removeChild(modal);
+                    document.body.removeChild(overlay);
+                    resolve('cancel');
+                };
+            });
+
+            if (userAction === 'copy') {
+                isDownloading = false;
+                return;
+            } else if (userAction === 'cancel') {
                 isDownloading = false;
                 return;
             }
@@ -271,51 +368,6 @@
         button.appendChild(buttonContent.children[1].cloneNode(true));
     }
 
-    async function downloadFile(fid) {
-        const response = await fetch(
-            "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
-            {
-                headers: {
-                    "accept": "application/json, text/plain, */*",
-                    "accept-language": "en,en-US;q=0.9",
-                    "cache-control": "no-cache",
-                    "content-type": "application/json;charset=UTF-8",
-                    "pragma": "no-cache",
-                    "priority": "u=1, i",
-                    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": '"macOS"',
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-site"
-                },
-                referrer: "https://pan.quark.cn/",
-                body: JSON.stringify({ fids: [fid] }),
-                method: "POST",
-                mode: "cors",
-                credentials: "include",
-                signal: abortController ? abortController.signal : undefined
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (data.data && data.data[0]) {
-            const item = data.data[0];
-            if (item.download_url && item.file_name) {
-                const a = document.createElement("a");
-                a.href = item.download_url;
-                a.download = item.file_name;
-                a.style.display = "none";
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            }
-        }
-    }
 
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
