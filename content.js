@@ -139,7 +139,7 @@
             const linksList = downloadLinks.map(link => link.url).join('\n');
             console.log("[CloudDown] 下载链接列表:\n", linksList);
 
-            // Create a modal dialog
+            // Create a modal dialog with textarea for links
             const modal = document.createElement('div');
             modal.style.cssText = `
                 position: fixed;
@@ -151,43 +151,67 @@
                 box-shadow: 0 4px 20px rgba(0,0,0,0.3);
                 z-index: 10000;
                 padding: 20px;
-                max-width: 600px;
+                max-width: 700px;
                 width: 90%;
+                max-height: 80vh;
+                display: flex;
+                flex-direction: column;
             `;
 
             modal.innerHTML = `
-                <h3 style="margin: 0 0 15px 0; color: #333;">CloudDown - 找到 ${downloadLinks.length} 个文件</h3>
-                <div style="margin-bottom: 15px; color: #666;">
-                    <p>请选择操作:</p>
+                <h3 style="margin: 0 0 15px 0; color: #333;">CloudDown - 成功获取 ${downloadLinks.length} 个下载链接</h3>
+                <div style="margin-bottom: 10px; color: #666; font-size: 14px;">
+                    <p style="margin: 5px 0;">✓ 所有链接已获取成功</p>
+                    <p style="margin: 5px 0;">• 点击"复制全部链接"复制到剪贴板</p>
+                    <p style="margin: 5px 0;">• 可以使用 IDM、迅雷等下载工具批量下载</p>
                 </div>
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="clouddown-copy" style="
-                        padding: 8px 20px;
-                        background: #f0f0f0;
-                        border: 1px solid #ddd;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        font-size: 14px;
-                    ">复制链接</button>
-                    <button id="clouddown-download" style="
-                        padding: 8px 20px;
-                        background: #4a9eff;
-                        color: white;
-                        border: none;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        font-size: 14px;
-                    ">批量下载</button>
-                    <button id="clouddown-cancel" style="
-                        padding: 8px 20px;
-                        background: #fff;
-                        border: 1px solid #ddd;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        font-size: 14px;
-                    ">取消</button>
+                <textarea id="clouddown-links" style="
+                    width: 100%;
+                    height: 300px;
+                    padding: 10px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    font-family: monospace;
+                    font-size: 12px;
+                    resize: vertical;
+                    box-sizing: border-box;
+                    background: #f9f9f9;
+                " readonly>${linksList}</textarea>
+                <div style="display: flex; gap: 10px; justify-content: space-between; margin-top: 15px;">
+                    <div style="color: #666; font-size: 12px;">
+                        共 ${downloadLinks.length} 个文件
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="clouddown-copy" style="
+                            padding: 10px 24px;
+                            background: #4a9eff;
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            font-weight: 500;
+                        ">复制全部链接</button>
+                        <button id="clouddown-download" style="
+                            padding: 10px 24px;
+                            background: #52c41a;
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">浏览器下载</button>
+                        <button id="clouddown-cancel" style="
+                            padding: 10px 24px;
+                            background: #fff;
+                            border: 1px solid #ddd;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">关闭</button>
+                    </div>
                 </div>
-                <div id="clouddown-status" style="margin-top: 10px; color: #4CAF50; display: none;"></div>
+                <div id="clouddown-status" style="margin-top: 10px; color: #4CAF50; display: none; text-align: center;"></div>
             `;
 
             // Create overlay
@@ -211,22 +235,40 @@
                 const downloadBtn = modal.querySelector('#clouddown-download');
                 const cancelBtn = modal.querySelector('#clouddown-cancel');
                 const statusDiv = modal.querySelector('#clouddown-status');
+                const linksTextarea = modal.querySelector('#clouddown-links');
+
+                // Auto-select all text when clicking textarea
+                linksTextarea.onclick = () => {
+                    linksTextarea.select();
+                };
 
                 copyBtn.onclick = async () => {
                     try {
-                        await navigator.clipboard.writeText(linksList);
-                        statusDiv.textContent = '✓ 链接已复制到剪贴板！';
-                        statusDiv.style.display = 'block';
-                        setTimeout(() => {
-                            document.body.removeChild(modal);
-                            document.body.removeChild(overlay);
-                            resolve('copy');
-                        }, 1500);
+                        // Select all text in textarea
+                        linksTextarea.select();
+
+                        // Try modern clipboard API first
+                        try {
+                            await navigator.clipboard.writeText(linksList);
+                            statusDiv.textContent = '✓ 已复制全部链接到剪贴板！';
+                            statusDiv.style.display = 'block';
+                            copyBtn.textContent = '✓ 已复制';
+                            copyBtn.style.background = '#52c41a';
+                        } catch (clipboardError) {
+                            // Fallback to document.execCommand
+                            document.execCommand('copy');
+                            statusDiv.textContent = '✓ 已复制全部链接到剪贴板！';
+                            statusDiv.style.display = 'block';
+                            copyBtn.textContent = '✓ 已复制';
+                            copyBtn.style.background = '#52c41a';
+                        }
+
+                        // Don't close modal after copy - user might want to copy again
                     } catch (err) {
-                        statusDiv.textContent = '复制失败，请查看控制台手动复制';
+                        statusDiv.textContent = '复制失败，请手动选择文本复制';
                         statusDiv.style.color = '#f44336';
                         statusDiv.style.display = 'block';
-                        console.log("[CloudDown] 链接列表:\n", linksList);
+                        console.error("[CloudDown] 复制失败:", err);
                     }
                 };
 
@@ -257,104 +299,185 @@
                 return;
             }
 
-            const updateProgress = (current, total, failed = 0, retrying = false) => {
+            const updateProgress = (current, total, failed = 0, status = '') => {
                 button.textContent = "";
                 const svg = createSpinnerSVG();
                 const span = document.createElement("span");
                 let statusText = `DL ${current}/${total}`;
                 if (failed > 0) statusText += ` (失败:${failed})`;
-                if (retrying) statusText += ` [重试中]`;
+                if (status) statusText += ` ${status}`;
                 span.textContent = statusText;
                 button.appendChild(svg);
                 button.appendChild(span);
             };
 
-            // Download queue implementation with concurrency limit
+            // Queue-based download with proper concurrent limit tracking
             const MAX_CONCURRENT = 5;
             const failedDownloads = [];
             let completedCount = 0;
-            let activeDownloads = 0;
+            let activeDownloads = new Map(); // Track active downloads
             let downloadQueue = [...downloadLinks];
+            let queueIndex = 0;
 
-            const downloadFile = async (link, retryCount = 0) => {
+            const downloadFile = async (link, index, retryCount = 0) => {
                 const maxRetries = 3;
+                const downloadId = `${link.name}_${index}`;
 
                 try {
+                    console.log(`[CloudDown] Starting download [${activeDownloads.size}/${MAX_CONCURRENT} active]: ${link.name}`);
+                    activeDownloads.set(downloadId, { link, startTime: Date.now() });
+
+                    // Use fetch to download the file
+                    const response = await fetch(link.url, {
+                        method: 'GET',
+                        mode: 'cors',
+                        credentials: 'include',
+                        signal: abortController?.signal
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    // Get the blob from response
+                    const blob = await response.blob();
+
+                    // Create blob URL and download
+                    const blobUrl = window.URL.createObjectURL(blob);
                     const a = document.createElement("a");
-                    a.href = link.url;
+                    a.href = blobUrl;
                     a.download = link.name;
                     a.style.display = "none";
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
 
-                    // Wait a bit to ensure download started
-                    await sleep(500);
+                    // Clean up blob URL after a short delay
+                    setTimeout(() => {
+                        window.URL.revokeObjectURL(blobUrl);
+                    }, 1000);
 
-                    console.log(`[CloudDown] ✓ Downloaded: ${link.name}`);
+                    completedCount++;
+                    console.log(`[CloudDown] ✓ Successfully downloaded (${completedCount}/${downloadLinks.length}): ${link.name}`);
+                    activeDownloads.delete(downloadId);
                     return true;
                 } catch (error) {
-                    console.error(`[CloudDown] Failed to download ${link.name}:`, error);
+                    activeDownloads.delete(downloadId);
+
+                    if (error.name === 'AbortError') {
+                        console.log(`[CloudDown] Download aborted: ${link.name}`);
+                        return false;
+                    }
+
+                    console.error(`[CloudDown] Failed to download ${link.name}:`, error.message);
+
                     if (retryCount < maxRetries - 1) {
                         console.log(`[CloudDown] Retrying ${link.name} (${retryCount + 1}/${maxRetries})...`);
                         await sleep(2000);
-                        return downloadFile(link, retryCount + 1);
+                        return downloadFile(link, index, retryCount + 1);
                     }
                     return false;
                 }
             };
 
+            // Process download queue with concurrent limit
             const processQueue = async () => {
-                const results = await Promise.all(
-                    Array(MAX_CONCURRENT).fill(null).map(async () => {
-                        while (downloadQueue.length > 0) {
-                            if (abortController?.signal.aborted) break;
+                const downloadPromises = [];
 
-                            const link = downloadQueue.shift();
-                            activeDownloads++;
-                            updateProgress(completedCount + activeDownloads, downloadLinks.length, failedDownloads.length);
+                while (queueIndex < downloadQueue.length || activeDownloads.size > 0) {
+                    if (abortController?.signal.aborted) break;
 
-                            const success = await downloadFile(link);
+                    // Start new downloads if we have capacity
+                    while (activeDownloads.size < MAX_CONCURRENT && queueIndex < downloadQueue.length) {
+                        const link = downloadQueue[queueIndex];
+                        const currentIndex = queueIndex;
+                        queueIndex++;
 
+                        updateProgress(
+                            Math.min(queueIndex, downloadLinks.length),
+                            downloadLinks.length,
+                            failedDownloads.length,
+                            `[活动:${activeDownloads.size}/${MAX_CONCURRENT}]`
+                        );
+
+                        const downloadPromise = downloadFile(link, currentIndex).then(success => {
                             if (!success) {
                                 failedDownloads.push(link);
+                                console.error(`[CloudDown] Failed after retries: ${link.name}`);
                             }
+                            return success;
+                        });
 
-                            completedCount++;
-                            activeDownloads--;
-                            updateProgress(completedCount, downloadLinks.length, failedDownloads.length);
+                        downloadPromises.push(downloadPromise);
+                    }
 
-                            // Small delay between downloads to prevent server overload
-                            if (downloadQueue.length > 0) {
-                                await sleep(1000);
-                            }
-                        }
-                    })
-                );
+                    // Wait for at least one download to complete before checking again
+                    if (activeDownloads.size >= MAX_CONCURRENT && queueIndex < downloadQueue.length) {
+                        await Promise.race(downloadPromises.filter(p => p !== undefined));
+                    }
+                }
+
+                // Wait for all remaining downloads to complete
+                await Promise.all(downloadPromises);
             };
 
-            console.log(`[CloudDown] Starting batch download of ${downloadLinks.length} files...`);
-            console.log(`[CloudDown] Max concurrent downloads: ${MAX_CONCURRENT}`);
-
-            // Process initial queue
+            console.log(`[CloudDown] Starting queue-based download of ${downloadLinks.length} files (max ${MAX_CONCURRENT} concurrent)...`);
             await processQueue();
 
-            // Retry failed downloads
+            // Retry failed downloads using the same queue system
             if (failedDownloads.length > 0) {
-                console.log(`[CloudDown] Retrying ${failedDownloads.length} failed downloads...`);
-                updateProgress(completedCount, downloadLinks.length, failedDownloads.length, true);
+                console.log(`[CloudDown] ===== Retrying ${failedDownloads.length} failed downloads =====`);
 
                 const retryList = [...failedDownloads];
-                failedDownloads.length = 0;
+                failedDownloads.length = 0; // Clear failed list for retry
                 downloadQueue = retryList;
+                queueIndex = 0;
+                activeDownloads.clear();
 
-                await sleep(3000); // Wait before retrying
-                await processQueue();
+                // Process retry queue with same concurrent limit
+                const retryPromises = [];
+                while (queueIndex < downloadQueue.length || activeDownloads.size > 0) {
+                    if (abortController?.signal.aborted) break;
+
+                    // Start new downloads if we have capacity
+                    while (activeDownloads.size < MAX_CONCURRENT && queueIndex < downloadQueue.length) {
+                        const link = downloadQueue[queueIndex];
+                        const currentIndex = queueIndex;
+                        queueIndex++;
+
+                        updateProgress(
+                            completedCount + queueIndex,
+                            downloadLinks.length,
+                            0,
+                            `[重试:${activeDownloads.size}/${MAX_CONCURRENT}]`
+                        );
+
+                        console.log(`[CloudDown] Final retry for: ${link.name}`);
+                        const retryPromise = downloadFile(link, currentIndex, 0).then(success => {
+                            if (!success) {
+                                failedDownloads.push(link);
+                            } else {
+                                completedCount++;
+                            }
+                            return success;
+                        });
+
+                        retryPromises.push(retryPromise);
+                    }
+
+                    // Wait for at least one download to complete before checking again
+                    if (activeDownloads.size >= MAX_CONCURRENT && queueIndex < downloadQueue.length) {
+                        await Promise.race(retryPromises.filter(p => p !== undefined));
+                    }
+                }
+
+                // Wait for all remaining retry downloads to complete
+                await Promise.all(retryPromises);
             }
 
-            // Final verification
+            // Final verification and report
             const totalSuccess = downloadLinks.length - failedDownloads.length;
-            console.log(`[CloudDown] Download complete!`);
+            console.log(`[CloudDown] ===== Download Complete =====`);
             console.log(`[CloudDown] Success: ${totalSuccess}/${downloadLinks.length}`);
 
             if (failedDownloads.length > 0) {
@@ -362,8 +485,9 @@
                     failedDownloads.map(f => f.name));
 
                 // Show failed files to user
-                const failedNames = failedDownloads.map(f => f.name).join('\n');
-                showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}`);
+                const failedNames = failedDownloads.slice(0, 5).map(f => f.name).join('\n');
+                const moreText = failedDownloads.length > 5 ? `\n... 和其他 ${failedDownloads.length - 5} 个文件` : '';
+                showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}${moreText}`);
             } else {
                 showNotification(`CloudDown 成功下载全部 ${downloadLinks.length} 个文件！`);
             }
