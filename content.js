@@ -257,22 +257,29 @@
                 return;
             }
 
-            const updateProgress = (current, total) => {
+            const updateProgress = (current, total, failed = 0, retrying = false) => {
                 button.textContent = "";
                 const svg = createSpinnerSVG();
                 const span = document.createElement("span");
-                span.textContent = `DL ${current}/${total}`;
+                let statusText = `DL ${current}/${total}`;
+                if (failed > 0) statusText += ` (失败:${failed})`;
+                if (retrying) statusText += ` [重试中]`;
+                span.textContent = statusText;
                 button.appendChild(svg);
                 button.appendChild(span);
             };
 
-            // Start downloading with the collected links
-            for (let i = 0; i < downloadLinks.length; i++) {
-                if (abortController && abortController.signal.aborted) break;
-                updateProgress(i + 1, downloadLinks.length);
+            // Download queue implementation with concurrency limit
+            const MAX_CONCURRENT = 5;
+            const failedDownloads = [];
+            let completedCount = 0;
+            let activeDownloads = 0;
+            let downloadQueue = [...downloadLinks];
+
+            const downloadFile = async (link, retryCount = 0) => {
+                const maxRetries = 3;
 
                 try {
-                    const link = downloadLinks[i];
                     const a = document.createElement("a");
                     a.href = link.url;
                     a.download = link.name;
@@ -281,24 +288,87 @@
                     a.click();
                     document.body.removeChild(a);
 
-                    console.log(`[CloudDown] Downloaded ${i + 1}/${downloadLinks.length}: ${link.name}`);
+                    // Wait a bit to ensure download started
+                    await sleep(500);
 
-                    if (i < downloadLinks.length - 1) {
-                        await sleep(2000); // 2 second delay between downloads
-                    }
+                    console.log(`[CloudDown] ✓ Downloaded: ${link.name}`);
+                    return true;
                 } catch (error) {
-                    if (error.name === "AbortError") {
-                        console.log("[CloudDown] 下载已取消");
-                        break;
+                    console.error(`[CloudDown] Failed to download ${link.name}:`, error);
+                    if (retryCount < maxRetries - 1) {
+                        console.log(`[CloudDown] Retrying ${link.name} (${retryCount + 1}/${maxRetries})...`);
+                        await sleep(2000);
+                        return downloadFile(link, retryCount + 1);
                     }
-                    console.error(`[CloudDown] 下载文件 ${i + 1} 失败:`, error);
+                    return false;
                 }
+            };
+
+            const processQueue = async () => {
+                const results = await Promise.all(
+                    Array(MAX_CONCURRENT).fill(null).map(async () => {
+                        while (downloadQueue.length > 0) {
+                            if (abortController?.signal.aborted) break;
+
+                            const link = downloadQueue.shift();
+                            activeDownloads++;
+                            updateProgress(completedCount + activeDownloads, downloadLinks.length, failedDownloads.length);
+
+                            const success = await downloadFile(link);
+
+                            if (!success) {
+                                failedDownloads.push(link);
+                            }
+
+                            completedCount++;
+                            activeDownloads--;
+                            updateProgress(completedCount, downloadLinks.length, failedDownloads.length);
+
+                            // Small delay between downloads to prevent server overload
+                            if (downloadQueue.length > 0) {
+                                await sleep(1000);
+                            }
+                        }
+                    })
+                );
+            };
+
+            console.log(`[CloudDown] Starting batch download of ${downloadLinks.length} files...`);
+            console.log(`[CloudDown] Max concurrent downloads: ${MAX_CONCURRENT}`);
+
+            // Process initial queue
+            await processQueue();
+
+            // Retry failed downloads
+            if (failedDownloads.length > 0) {
+                console.log(`[CloudDown] Retrying ${failedDownloads.length} failed downloads...`);
+                updateProgress(completedCount, downloadLinks.length, failedDownloads.length, true);
+
+                const retryList = [...failedDownloads];
+                failedDownloads.length = 0;
+                downloadQueue = retryList;
+
+                await sleep(3000); // Wait before retrying
+                await processQueue();
+            }
+
+            // Final verification
+            const totalSuccess = downloadLinks.length - failedDownloads.length;
+            console.log(`[CloudDown] Download complete!`);
+            console.log(`[CloudDown] Success: ${totalSuccess}/${downloadLinks.length}`);
+
+            if (failedDownloads.length > 0) {
+                console.error(`[CloudDown] Failed downloads (${failedDownloads.length}):`,
+                    failedDownloads.map(f => f.name));
+
+                // Show failed files to user
+                const failedNames = failedDownloads.map(f => f.name).join('\n');
+                showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}`);
+            } else {
+                showNotification(`CloudDown 成功下载全部 ${downloadLinks.length} 个文件！`);
             }
 
             resetButton(button, buttonContent);
-            if (!abortController || !abortController.signal.aborted) {
-                showNotification("CloudDown 批量下载完成！");
-            }
         } catch (error) {
             console.error("[CloudDown] 批量下载错误:", error);
             showNotification("批量下载失败，请查看控制台了解详情");
