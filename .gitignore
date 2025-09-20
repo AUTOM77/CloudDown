@@ -1,3 +1,8 @@
+# Generated files
+update.xml
+*.crx
+*.zip
+
 # Logs
 logs
 *.log

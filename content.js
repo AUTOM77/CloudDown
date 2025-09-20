@@ -19,12 +19,30 @@
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("width", "16");
         svg.setAttribute("height", "16");
-        svg.setAttribute("viewBox", "0 0 16 16");
-        svg.setAttribute("fill", "currentColor");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
 
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", "M2 2h12v2H2V2zm0 3h12v2H2V5zm0 3h12v2H2V8zm2 3h8v1.5l-4 2.5-4-2.5V11z");
-        svg.appendChild(path);
+        // Cloud shape
+        const cloud = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        cloud.setAttribute("d", "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z");
+        svg.appendChild(cloud);
+
+        // Multiple download arrows
+        const arrow1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arrow1.setAttribute("d", "M8 13v4m0 0l-2-2m2 2l2-2");
+        svg.appendChild(arrow1);
+
+        const arrow2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arrow2.setAttribute("d", "M12 11v6m0 0l-2-2m2 2l2-2");
+        svg.appendChild(arrow2);
+
+        const arrow3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arrow3.setAttribute("d", "M16 13v4m0 0l-2-2m2 2l2-2");
+        svg.appendChild(arrow3);
 
         const span = document.createElement("span");
         span.textContent = "BATCH_DL";
@@ -48,6 +66,8 @@
         try {
             isDownloading = true;
             abortController = new AbortController();
+
+            await loadAllPages();
 
             const fids = Array.from(document.querySelectorAll("tr.ant-table-row[data-row-key]"))
                 .map(row => row.getAttribute("data-row-key"))
@@ -108,13 +128,25 @@
         svg.setAttribute("class", "spin");
         svg.setAttribute("width", "16");
         svg.setAttribute("height", "16");
-        svg.setAttribute("viewBox", "0 0 16 16");
-        svg.setAttribute("fill", "currentColor");
-        
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", "M8 1v2m0 10v2m7-7h-2M3 8H1m11.3-4.3l-1.4 1.4M5.1 10.9l-1.4 1.4m8.6 0l-1.4-1.4M5.1 5.1L3.7 3.7");
-        svg.appendChild(path);
-        
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "12");
+        circle.setAttribute("cy", "12");
+        circle.setAttribute("r", "10");
+        circle.setAttribute("stroke-opacity", "0.25");
+        svg.appendChild(circle);
+
+        const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
+        arc.setAttribute("stroke-opacity", "1");
+        svg.appendChild(arc);
+
         return svg;
     }
 
@@ -168,6 +200,42 @@
                 document.body.removeChild(a);
             }
         }
+    }
+
+    async function loadAllPages() {
+        let hasMore = true;
+        let attempts = 0;
+        const maxAttempts = 100;
+
+        while (hasMore && attempts < maxAttempts) {
+            attempts++;
+
+            const loadMoreButton = document.querySelector('.ant-pagination-next:not(.ant-pagination-disabled)');
+            const scrollContainer = document.querySelector('.section-main');
+
+            if (!loadMoreButton && !scrollContainer) {
+                hasMore = false;
+                break;
+            }
+
+            if (loadMoreButton) {
+                loadMoreButton.click();
+                await sleep(1500);
+            }
+            else if (scrollContainer) {
+                const previousCount = document.querySelectorAll("tr.ant-table-row[data-row-key]").length;
+                scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                await sleep(1500);
+
+                const currentCount = document.querySelectorAll("tr.ant-table-row[data-row-key]").length;
+
+                if (currentCount === previousCount) {
+                    hasMore = false;
+                }
+            }
+        }
+
+        console.log(`[CloudDown] Loaded all pages (${attempts} attempts)`);
     }
 
     function sleep(ms) {

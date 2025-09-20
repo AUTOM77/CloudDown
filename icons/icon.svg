@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Background Circle -->
+  <circle cx="64" cy="64" r="60" fill="#7c3aed" />
+
+  <!-- Cloud Shape -->
+  <path d="M88 52c0-11.046-8.954-20-20-20-8.837 0-16.327 5.621-19.099 13.471C43.044 46.326 38 51.512 38 58c0 .338.015.672.044 1.002C31.248 60.272 26 66.317 26 73.5 26 81.508 32.492 88 40.5 88h44c8.837 0 16-7.163 16-16s-7.163-16-16-16c-.338 0-.671.011-1 .032C87.097 54.834 88 53.485 88 52z"
+        fill="white" fill-opacity="0.95"/>
+
+  <!-- Download Arrows -->
+  <g stroke="#5b21b6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Main Solid Arrow (center) -->
+    <path d="M64 56v20m0 0l-7-7m7 7l7-7" stroke-width="4" />
+
+    <!-- Dashed Arrows (multiple) -->
+    <g stroke-dasharray="3 3" stroke-width="2.5" opacity="0.7">
+      <!-- Left side arrows -->
+      <path d="M48 58v14m0 0l-4-4m4 4l4-4" />
+      <path d="M36 60v10m0 0l-3-3m3 3l3-3" />
+
+      <!-- Right side arrows -->
+      <path d="M80 58v14m0 0l-4-4m4 4l4-4" />
+      <path d="M92 60v10m0 0l-3-3m3 3l3-3" />
+
+      <!-- Additional background arrows -->
+      <path d="M54 62v12m0 0l-3-3m3 3l3-3" opacity="0.5" />
+      <path d="M74 62v12m0 0l-3-3m3 3l3-3" opacity="0.5" />
+    </g>
+  </g>
+</svg>

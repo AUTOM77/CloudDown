@@ -46,7 +46,7 @@ jobs:
         <?xml version='1.0' encoding='UTF-8'?>
         <gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
           <app appid='YOUR_EXTENSION_ID_HERE'>
-            <updatecheck codebase='https://github.com/AUTOM77/CloudDown/releases/latest/download/CloudDown.crx' version='${{ steps.version.outputs.version }}' />
+            <updatecheck codebase='https://github.com/AUTOM77/CloudDown/releases/download/${{ steps.version.outputs.version }}/CloudDown.crx' version='${{ steps.version.outputs.version }}' />
           </app>
         </gupdate>
         EOF
