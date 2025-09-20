@@ -8,20 +8,20 @@
     align-items: center;
     gap: 6px;
     padding: 8px 20px;
-    background: linear-gradient(45deg, #ff00ff, #00ffff);
-    color: #000;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
     border: none;
-    border-radius: 0;
+    border-radius: 8px;
     font-size: 14px;
-    font-weight: bold;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
-    font-family: 'Courier New', monospace;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     box-sizing: border-box;
-    text-transform: uppercase;
     position: relative;
     overflow: hidden;
     user-select: none;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .batch-download-btn::before {
@@ -31,8 +31,8 @@
     left: -100%;
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-    transition: left 0.5s ease;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    transition: left 0.6s ease;
 }
 
 .batch-download-btn:hover::before {
@@ -40,17 +40,16 @@
 }
 
 .batch-download-btn:hover {
-    background: linear-gradient(45deg, #00ffff, #ffff00);
-    transform: translateY(-2px);
-    box-shadow: 
-        0 4px 15px rgba(0, 255, 255, 0.5),
-        0 4px 30px rgba(255, 0, 255, 0.3);
-    text-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
+    background: linear-gradient(135deg, #764ba2 0%, #f093fb 100%);
+    transform: translateY(-2px) scale(1.02);
+    box-shadow:
+        0 6px 20px rgba(118, 75, 162, 0.4),
+        0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
 .batch-download-btn:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 5px rgba(0, 255, 255, 0.5);
+    transform: translateY(0) scale(0.98);
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .batch-download-btn:disabled {
@@ -59,11 +58,25 @@
     pointer-events: none;
 }
 
+.batch-download-btn.downloading {
+    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        box-shadow: 0 2px 8px rgba(67, 233, 123, 0.3);
+    }
+    50% {
+        box-shadow: 0 4px 16px rgba(67, 233, 123, 0.5);
+    }
+}
+
 .batch-download-btn svg {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    filter: drop-shadow(0 0 2px currentColor);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
 }
 
 .batch-download-btn svg.spin {
@@ -77,5 +90,62 @@
 
 .batch-download-btn span {
     white-space: nowrap;
-    letter-spacing: 1px;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Progress indicator styles */
+.download-progress {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+    min-width: 300px;
+    z-index: 10001;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.download-progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 12px 0;
+}
+
+.download-progress-fill {
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+.download-stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #666;
+}
+
+.download-stat-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.stat-success {
+    color: #4CAF50;
+}
+
+.stat-failed {
+    color: #f44336;
+}
+
+.stat-pending {
+    color: #2196F3;
 }
