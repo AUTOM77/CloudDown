@@ -68,17 +68,94 @@
 
             updateButton("正在获取文件列表...", true);
 
-            // Use API to get complete file list
-            const fids = await getAllFilesViaAPI();
+            // First try to get files from API, if that fails, fall back to DOM
+            let fids = await getAllFilesViaAPI();
+
+            // If API method didn't work well, use the DOM method as fallback
+            if (fids.length === 0) {
+                console.log("[CloudDown] API method returned no files, trying DOM method...");
+                await loadAllPages(); // Load all pages first
+
+                // Try both data-select-id and data-row-key attributes
+                const selectIdElements = document.querySelectorAll("[data-select-id]");
+                if (selectIdElements.length > 0) {
+                    fids = Array.from(selectIdElements)
+                        .map(el => el.getAttribute("data-select-id"))
+                        .filter(fid => fid && fid.trim());
+                    console.log(`[CloudDown] Found ${fids.length} files from data-select-id attributes`);
+                }
+
+                // Fallback to data-row-key if no data-select-id found
+                if (fids.length === 0) {
+                    fids = Array.from(document.querySelectorAll("tr.ant-table-row[data-row-key]"))
+                        .map(row => row.getAttribute("data-row-key"))
+                        .filter(fid => fid && fid.trim());
+                    console.log(`[CloudDown] Found ${fids.length} files from data-row-key attributes`);
+                }
+            }
 
             if (fids.length === 0) {
                 showNotification("未找到可下载的文件");
                 return;
             }
 
-            const confirmed = window.confirm(`确定要下载 ${fids.length} 个文件吗？`);
+            updateButton("正在获取下载链接...", true);
+
+            // Get download links for all files
+            const downloadLinks = [];
+            for (let i = 0; i < fids.length; i++) {
+                try {
+                    const response = await fetch(
+                        "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
+                        {
+                            method: "POST",
+                            headers: {
+                                "accept": "application/json, text/plain, */*",
+                                "content-type": "application/json;charset=UTF-8",
+                            },
+                            body: JSON.stringify({ fids: [fids[i]] }),
+                            credentials: "include",
+                            signal: abortController ? abortController.signal : undefined
+                        }
+                    );
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.data && data.data[0]) {
+                            downloadLinks.push({
+                                url: data.data[0].download_url,
+                                name: data.data[0].file_name
+                            });
+                        }
+                    }
+                } catch (error) {
+                    console.error(`[CloudDown] 获取文件 ${i + 1} 链接失败:`, error);
+                }
+            }
+
+            resetButton(button, buttonContent);
+
+            // Show download links and options
+            const linksList = downloadLinks.map(link => `${link.name}: ${link.url}`).join('\n');
+            console.log("[CloudDown] 下载链接列表:\n", linksList);
+
+            // Create a better dialog with options
+            const message = `找到 ${downloadLinks.length} 个文件的下载链接\n\n` +
+                          `选择操作:\n` +
+                          `• 确定 - 开始批量下载\n` +
+                          `• 取消 - 复制链接到控制台（可手动复制）`;
+
+            const confirmed = window.confirm(message);
+
             if (!confirmed) {
-                resetButton(buttonContent);
+                // Copy links to clipboard if possible
+                try {
+                    await navigator.clipboard.writeText(linksList);
+                    showNotification("下载链接已复制到剪贴板！");
+                } catch (err) {
+                    console.log("[CloudDown] 无法自动复制，请从控制台手动复制链接");
+                }
+                resetButton(button, buttonContent);
                 isDownloading = false;
                 return;
             }
@@ -92,16 +169,25 @@
                 button.appendChild(span);
             };
 
-            // Sequential download like v3.0.0 - more reliable for Quark Drive
-            for (let i = 0; i < fids.length; i++) {
+            // Start downloading with the collected links
+            for (let i = 0; i < downloadLinks.length; i++) {
                 if (abortController && abortController.signal.aborted) break;
-
-                updateProgress(i + 1, fids.length);
+                updateProgress(i + 1, downloadLinks.length);
 
                 try {
-                    await downloadFile(fids[i]);
-                    if (i < fids.length - 1) {
-                        await sleep(1000); // 1 second delay between downloads
+                    const link = downloadLinks[i];
+                    const a = document.createElement("a");
+                    a.href = link.url;
+                    a.download = link.name;
+                    a.style.display = "none";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+
+                    console.log(`[CloudDown] Downloaded ${i + 1}/${downloadLinks.length}: ${link.name}`);
+
+                    if (i < downloadLinks.length - 1) {
+                        await sleep(2000); // 2 second delay between downloads
                     }
                 } catch (error) {
                     if (error.name === "AbortError") {
@@ -112,14 +198,14 @@
                 }
             }
 
-            resetButton(buttonContent);
+            resetButton(button, buttonContent);
             if (!abortController || !abortController.signal.aborted) {
                 showNotification("CloudDown 批量下载完成！");
             }
         } catch (error) {
             console.error("[CloudDown] 批量下载错误:", error);
             showNotification("批量下载失败，请查看控制台了解详情");
-            resetButton(buttonContent);
+            resetButton(button, buttonContent);
         } finally {
             isDownloading = false;
             abortController = null;
@@ -127,217 +213,43 @@
     }
 
     async function getAllFilesViaAPI() {
-        // First, try to get the current folder ID from DOM
-        let folderIdFromDOM = getCurrentFolderIdFromDOM();
-        console.log(`[CloudDown] Initial folder ID from DOM: ${folderIdFromDOM}`);
+        const firstRow = document.querySelector("tr.ant-table-row[data-row-key]");
+        let currentFolderId = null;
 
-        let finalFolderId = folderIdFromDOM;
-
-        // If DOM returned null or we need to verify, get folder ID from first file
-        if (folderIdFromDOM === null || (folderIdFromDOM !== '0' && document.querySelector("tr.ant-table-row[data-row-key]"))) {
-            console.log("[CloudDown] Getting actual folder ID from first file...");
-
-            const firstFid = document.querySelector("tr.ant-table-row[data-row-key]")?.getAttribute("data-row-key");
-            if (firstFid) {
-                try {
-                    // Use the correct API endpoint for file info
-                    const response = await fetch(
-                        `https://drive-pc.quark.cn/1/clouddrive/file/info?pr=ucpro&fr=pc&uc_param_str=`,
-                        {
-                            method: "POST",
-                            headers: {
-                                "accept": "application/json, text/plain, */*",
-                                "content-type": "application/json;charset=UTF-8",
-                                "sec-fetch-dest": "empty",
-                                "sec-fetch-mode": "cors",
-                                "sec-fetch-site": "same-site"
-                            },
-                            referrer: "https://pan.quark.cn/",
-                            body: JSON.stringify({
-                                fids: [firstFid]
-                            }),
-                            mode: "cors",
-                            credentials: "include"
-                        }
-                    );
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        console.log("[CloudDown] File info response:", data);
-
-                        if (data.data && data.data.length > 0 && data.data[0].pdir_fid) {
-                            finalFolderId = data.data[0].pdir_fid;
-                            console.log(`[CloudDown] ✓ Got current folder ID from first file's parent: ${finalFolderId}`);
-                        } else if (data.data && data.data.length > 0) {
-                            // If no pdir_fid, we might be in root
-                            console.log("[CloudDown] File has no pdir_fid, likely in root folder");
-                            finalFolderId = '0';
-                        }
-                    } else {
-                        console.error(`[CloudDown] File info API error: ${response.status}`);
-                        // Fallback to root if API fails
-                        finalFolderId = finalFolderId || '0';
-                    }
-                } catch (error) {
-                    console.error("[CloudDown] Error getting folder ID from file:", error);
-                    finalFolderId = finalFolderId || '0';
-                }
-            } else {
-                console.log("[CloudDown] No files in table to get folder ID from");
-                finalFolderId = finalFolderId || '0';
-            }
+        if (firstRow) {
+            const pathname = firstRow.getAttribute("pathname");
+            const match = pathname?.match(/\/list\/all\/([a-z0-9]{32})/);
+            if (match) currentFolderId = match[1];
         }
 
-        const allFiles = [];
-        let page = 1;
-        const pageSize = 100; // Fetch more files per request
-        let hasMore = true;
-
-        while (hasMore) {
-            try {
-                const response = await fetch(
-                    `https://drive-pc.quark.cn/1/clouddrive/file/sort?pr=ucpro&fr=pc&uc_param_str=&pdir_fid=${finalFolderId}&_page=${page}&_size=${pageSize}&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc`,
-                    {
-                        headers: {
-                            "accept": "application/json, text/plain, */*",
-                            "accept-language": "en,en-US;q=0.9",
-                            "cache-control": "no-cache",
-                            "pragma": "no-cache",
-                            "sec-fetch-dest": "empty",
-                            "sec-fetch-mode": "cors",
-                            "sec-fetch-site": "same-site"
-                        },
-                        referrer: "https://pan.quark.cn/",
-                        method: "GET",
-                        mode: "cors",
-                        credentials: "include"
-                    }
-                );
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
-
-                if (data.data && data.data.list) {
-                    // Filter for downloadable files (not folders)
-                    const files = data.data.list.filter(item =>
-                        item.file && !item.dir && item.fid
-                    ).map(item => item.fid);
-
-                    allFiles.push(...files);
-                    console.log(`[CloudDown] Page ${page}: Found ${files.length} files, Total: ${allFiles.length}`);
-                }
-
-                // Check if there are more pages
-                if (data.metadata && data.metadata._total) {
-                    const total = data.metadata._total;
-                    hasMore = (page * pageSize) < total;
-                } else {
-                    hasMore = false;
-                }
-
-                page++;
-
-                // Small delay to avoid rate limiting
-                if (hasMore) {
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                }
-
-            } catch (error) {
-                console.error(`[CloudDown] Error fetching page ${page}:`, error);
-                hasMore = false;
-            }
+        if (!currentFolderId) {
+            console.log("[CloudDown] Failed to get current folder ID");
+            return [];
         }
 
-        console.log(`[CloudDown] Total files found via API: ${allFiles.length}`);
-        return allFiles;
+        console.log(`[CloudDown] Current folder ID: ${currentFolderId}`);
+
+        const url = `https://drive-pc.quark.cn/1/clouddrive/file/sort?pr=ucpro&fr=pc&pdir_fid=${currentFolderId}&_size=500`;
+
+        try {
+            const response = await fetch(url, {credentials: "include"});
+            const data = await response.json();
+
+            if (data.data?.list) {
+                const fileIds = data.data.list
+                    .filter(item => item.file && !item.dir)
+                    .map(item => item.fid);
+
+                console.log(`[CloudDown] Total files found via API: ${fileIds.length}`);
+                return fileIds;
+            }
+        } catch (error) {
+            console.error("[CloudDown] Error fetching files:", error);
+        }
+
+        return [];
     }
 
-    function getCurrentFolderIdFromDOM() {
-        console.log("[CloudDown] Extracting folder ID from DOM...");
-
-        // The URL parameter ?id= is the PARENT folder ID when viewing a subfolder
-        // We need to find the CURRENT folder ID instead
-        const urlParams = new URLSearchParams(window.location.search);
-        const parentFolderId = urlParams.get('id');
-        if (parentFolderId) {
-            console.log(`[CloudDown] Parent folder ID from URL: ${parentFolderId} (not using this)`);
-        }
-
-        // Method 2: Look for folder ID in DOM attributes
-        // Quark might store folder ID in data attributes
-        const elements = document.querySelectorAll('[data-fid], [data-folder-id], [data-pdir-fid]');
-        for (const el of elements) {
-            const fid = el.dataset.fid || el.dataset.folderId || el.dataset.pdirFid;
-            if (fid && fid.length === 32) { // Folder IDs are typically 32 characters
-                console.log(`[CloudDown] ✓ Folder ID from data attribute: ${fid}`);
-                return fid;
-            }
-        }
-
-        // Method 3: Check React props in DOM elements
-        // React often stores props in special properties
-        const mainContent = document.querySelector('.section-main, .ant-table-wrapper, [class*="FileList"]');
-        if (mainContent) {
-            // Look for React fiber or props
-            const reactKeys = Object.keys(mainContent).filter(key =>
-                key.startsWith('__react') || key.startsWith('_react')
-            );
-
-            for (const key of reactKeys) {
-                try {
-                    const props = mainContent[key]?.memoizedProps || mainContent[key]?.pendingProps;
-                    if (props?.folderId || props?.pdirFid || props?.pdir_fid) {
-                        const fid = props.folderId || props.pdirFid || props.pdir_fid;
-                        console.log(`[CloudDown] ✓ Folder ID from React props: ${fid}`);
-                        return fid;
-                    }
-                } catch (e) {
-                    // Continue if can't access React internals
-                }
-            }
-        }
-
-        // Method 4: Extract from breadcrumb links
-        const breadcrumb = document.querySelector('.ant-breadcrumb');
-        if (breadcrumb) {
-            // Get the current (last) breadcrumb item
-            const currentItem = breadcrumb.querySelector('.ant-breadcrumb-link:last-child') ||
-                               breadcrumb.querySelector('[aria-current="page"]');
-            if (currentItem) {
-                const href = currentItem.getAttribute('href') || currentItem.querySelector('a')?.getAttribute('href');
-                if (href) {
-                    const match = href.match(/[?&]id=([a-f0-9]{32})/);
-                    if (match) {
-                        console.log(`[CloudDown] ✓ Folder ID from breadcrumb: ${match[1]}`);
-                        return match[1];
-                    }
-                }
-            }
-        }
-
-        // Method 5: Check if we're in root folder
-        // Root folder has no URL parameter, or the page shows "全部文件"
-        if (!parentFolderId) {
-            const pageTitle = document.querySelector('[class*="title"], [class*="header"]');
-            if (pageTitle) {
-                const titleText = pageTitle.textContent;
-                if (titleText === '全部文件' || titleText === '我的文件') {
-                    console.log("[CloudDown] In root folder (no URL param and root title)");
-                    return '0';
-                }
-            }
-            // No parent ID in URL usually means root
-            console.log("[CloudDown] In root folder (no URL parameter)");
-            return '0';
-        }
-
-        // If we can't find the current folder ID from DOM, we need to get it from files
-        console.log("[CloudDown] Current folder ID not found in DOM, will get from file info");
-        return null; // Return null to indicate we need to get it from file API
-    }
 
     function updateButton(text, showSpinner = false) {
         const button = document.querySelector("#batch-download-btn");
@@ -409,85 +321,6 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    function createSpinnerSVG() {
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("class", "spin");
-        svg.setAttribute("width", "16");
-        svg.setAttribute("height", "16");
-        svg.setAttribute("viewBox", "0 0 24 24");
-        svg.setAttribute("fill", "none");
-        svg.setAttribute("stroke", "currentColor");
-        svg.setAttribute("stroke-width", "2");
-        svg.setAttribute("stroke-linecap", "round");
-        svg.setAttribute("stroke-linejoin", "round");
-
-        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        circle.setAttribute("cx", "12");
-        circle.setAttribute("cy", "12");
-        circle.setAttribute("r", "10");
-        circle.setAttribute("stroke-opacity", "0.25");
-        svg.appendChild(circle);
-
-        const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
-        arc.setAttribute("stroke-opacity", "1");
-        svg.appendChild(arc);
-
-        return svg;
-    }
-
-    function resetButton(button, buttonContent) {
-        button.textContent = "";
-        button.appendChild(buttonContent.children[0].cloneNode(true));
-        button.appendChild(buttonContent.children[1].cloneNode(true));
-    }
-
-    async function downloadFile(fid) {
-        const response = await fetch(
-            "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
-            {
-                headers: {
-                    "accept": "application/json, text/plain, */*",
-                    "accept-language": "en,en-US;q=0.9",
-                    "cache-control": "no-cache",
-                    "content-type": "application/json;charset=UTF-8",
-                    "pragma": "no-cache",
-                    "priority": "u=1, i",
-                    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": '"macOS"',
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-site"
-                },
-                referrer: "https://pan.quark.cn/",
-                body: JSON.stringify({ fids: [fid] }),
-                method: "POST",
-                mode: "cors",
-                credentials: "include",
-                signal: abortController.signal
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (data.data && data.data[0]) {
-            const item = data.data[0];
-            if (item.download_url && item.file_name) {
-                const a = document.createElement("a");
-                a.href = item.download_url;
-                a.download = item.file_name;
-                a.style.display = "none";
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            }
-        }
-    }
-
     async function loadAllPages() {
         let hasMore = true;
         let attempts = 0;
@@ -524,9 +357,33 @@
         console.log(`[CloudDown] Loaded all pages (${attempts} attempts)`);
     }
 
-    function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+    function createSpinnerSVG() {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "spin");
+        svg.setAttribute("width", "16");
+        svg.setAttribute("height", "16");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "12");
+        circle.setAttribute("cy", "12");
+        circle.setAttribute("r", "10");
+        circle.setAttribute("stroke-opacity", "0.25");
+        svg.appendChild(circle);
+
+        const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
+        arc.setAttribute("stroke-opacity", "1");
+        svg.appendChild(arc);
+
+        return svg;
     }
+
 
     function showNotification(message) {
         console.log(`[CloudDown] ${message}`);
