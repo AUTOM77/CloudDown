@@ -37,7 +37,7 @@ jobs:
 
     - name: Generate CRX file
       run: |
-        mv CloudDown.zip CloudDown.crx
+        cp CloudDown.zip CloudDown.crx
 
     - name: Generate update.xml
       run: |
@@ -60,6 +60,7 @@ jobs:
         overwrite_files: true
         files: |
           CloudDown.crx
+          CloudDown.zip
           update.xml
         body: |
           ## CloudDown v${{ steps.version.outputs.version }}
@@ -71,11 +72,3 @@ jobs:
           4. Drag and drop the CRX file to install
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: extension-package
-        path: |
-          CloudDown.crx
-          update.xml
