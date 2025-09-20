@@ -311,23 +311,17 @@
                 button.appendChild(span);
             };
 
-            // Queue-based download with proper concurrent limit tracking
-            const MAX_CONCURRENT = 5;
+            // Sequential download - Quark doesn't support concurrent downloads
             const failedDownloads = [];
             let completedCount = 0;
-            let activeDownloads = new Map(); // Track active downloads
-            let downloadQueue = [...downloadLinks];
-            let queueIndex = 0;
 
-            const downloadFile = async (link, index, retryCount = 0) => {
+            const downloadFile = async (link, retryCount = 0) => {
                 const maxRetries = 3;
-                const downloadId = `${link.name}_${index}`;
 
                 try {
-                    console.log(`[CloudDown] Starting download [${activeDownloads.size}/${MAX_CONCURRENT} active]: ${link.name}`);
-                    activeDownloads.set(downloadId, { link, startTime: Date.now() });
+                    console.log(`[CloudDown] Downloading (${completedCount + 1}/${downloadLinks.length}): ${link.name}`);
 
-                    // Use fetch to download the file
+                    // Use fetch to download the file completely
                     const response = await fetch(link.url, {
                         method: 'GET',
                         mode: 'cors',
@@ -339,10 +333,13 @@
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
 
-                    // Get the blob from response
+                    // Get the complete blob from response
                     const blob = await response.blob();
 
-                    // Create blob URL and download
+                    // Wait to ensure file is fully received
+                    await sleep(500);
+
+                    // Create blob URL and trigger download
                     const blobUrl = window.URL.createObjectURL(blob);
                     const a = document.createElement("a");
                     a.href = blobUrl;
@@ -352,18 +349,14 @@
                     a.click();
                     document.body.removeChild(a);
 
-                    // Clean up blob URL after a short delay
-                    setTimeout(() => {
-                        window.URL.revokeObjectURL(blobUrl);
-                    }, 1000);
+                    // Wait for download to fully complete before cleanup
+                    await sleep(2000);
+                    window.URL.revokeObjectURL(blobUrl);
 
                     completedCount++;
                     console.log(`[CloudDown] ✓ Successfully downloaded (${completedCount}/${downloadLinks.length}): ${link.name}`);
-                    activeDownloads.delete(downloadId);
                     return true;
                 } catch (error) {
-                    activeDownloads.delete(downloadId);
-
                     if (error.name === 'AbortError') {
                         console.log(`[CloudDown] Download aborted: ${link.name}`);
                         return false;
@@ -373,106 +366,60 @@
 
                     if (retryCount < maxRetries - 1) {
                         console.log(`[CloudDown] Retrying ${link.name} (${retryCount + 1}/${maxRetries})...`);
-                        await sleep(2000);
-                        return downloadFile(link, index, retryCount + 1);
+                        await sleep(3000);
+                        return downloadFile(link, retryCount + 1);
                     }
                     return false;
                 }
             };
 
-            // Process download queue with concurrent limit
-            const processQueue = async () => {
-                const downloadPromises = [];
+            console.log(`[CloudDown] Starting sequential download of ${downloadLinks.length} files...`);
 
-                while (queueIndex < downloadQueue.length || activeDownloads.size > 0) {
-                    if (abortController?.signal.aborted) break;
+            // Process downloads strictly one by one
+            for (let i = 0; i < downloadLinks.length; i++) {
+                if (abortController?.signal.aborted) break;
 
-                    // Start new downloads if we have capacity
-                    while (activeDownloads.size < MAX_CONCURRENT && queueIndex < downloadQueue.length) {
-                        const link = downloadQueue[queueIndex];
-                        const currentIndex = queueIndex;
-                        queueIndex++;
+                const link = downloadLinks[i];
+                updateProgress(i + 1, downloadLinks.length, failedDownloads.length, '[下载中]');
 
-                        updateProgress(
-                            Math.min(queueIndex, downloadLinks.length),
-                            downloadLinks.length,
-                            failedDownloads.length,
-                            `[活动:${activeDownloads.size}/${MAX_CONCURRENT}]`
-                        );
+                const success = await downloadFile(link);
 
-                        const downloadPromise = downloadFile(link, currentIndex).then(success => {
-                            if (!success) {
-                                failedDownloads.push(link);
-                                console.error(`[CloudDown] Failed after retries: ${link.name}`);
-                            }
-                            return success;
-                        });
-
-                        downloadPromises.push(downloadPromise);
-                    }
-
-                    // Wait for at least one download to complete before checking again
-                    if (activeDownloads.size >= MAX_CONCURRENT && queueIndex < downloadQueue.length) {
-                        await Promise.race(downloadPromises.filter(p => p !== undefined));
-                    }
+                if (!success) {
+                    failedDownloads.push(link);
+                    console.error(`[CloudDown] Failed after retries: ${link.name}`);
                 }
 
-                // Wait for all remaining downloads to complete
-                await Promise.all(downloadPromises);
-            };
+                // Wait between downloads to ensure connection is closed
+                if (i < downloadLinks.length - 1) {
+                    await sleep(1000);
+                }
+            }
 
-            console.log(`[CloudDown] Starting queue-based download of ${downloadLinks.length} files (max ${MAX_CONCURRENT} concurrent)...`);
-            await processQueue();
-
-            // Retry failed downloads using the same queue system
+            // Retry failed downloads sequentially
             if (failedDownloads.length > 0) {
                 console.log(`[CloudDown] ===== Retrying ${failedDownloads.length} failed downloads =====`);
 
                 const retryList = [...failedDownloads];
                 failedDownloads.length = 0; // Clear failed list for retry
-                downloadQueue = retryList;
-                queueIndex = 0;
-                activeDownloads.clear();
 
-                // Process retry queue with same concurrent limit
-                const retryPromises = [];
-                while (queueIndex < downloadQueue.length || activeDownloads.size > 0) {
+                for (let i = 0; i < retryList.length; i++) {
                     if (abortController?.signal.aborted) break;
 
-                    // Start new downloads if we have capacity
-                    while (activeDownloads.size < MAX_CONCURRENT && queueIndex < downloadQueue.length) {
-                        const link = downloadQueue[queueIndex];
-                        const currentIndex = queueIndex;
-                        queueIndex++;
+                    const link = retryList[i];
+                    updateProgress(completedCount + i + 1, downloadLinks.length, 0, '[重试中]');
 
-                        updateProgress(
-                            completedCount + queueIndex,
-                            downloadLinks.length,
-                            0,
-                            `[重试:${activeDownloads.size}/${MAX_CONCURRENT}]`
-                        );
+                    console.log(`[CloudDown] Final retry for: ${link.name}`);
+                    const success = await downloadFile(link, 0); // Reset retry count
 
-                        console.log(`[CloudDown] Final retry for: ${link.name}`);
-                        const retryPromise = downloadFile(link, currentIndex, 0).then(success => {
-                            if (!success) {
-                                failedDownloads.push(link);
-                            } else {
-                                completedCount++;
-                            }
-                            return success;
-                        });
-
-                        retryPromises.push(retryPromise);
+                    if (!success) {
+                        failedDownloads.push(link);
                     }
 
-                    // Wait for at least one download to complete before checking again
-                    if (activeDownloads.size >= MAX_CONCURRENT && queueIndex < downloadQueue.length) {
-                        await Promise.race(retryPromises.filter(p => p !== undefined));
+                    // Wait between retry downloads
+                    if (i < retryList.length - 1) {
+                        await sleep(1000);
                     }
                 }
-
-                // Wait for all remaining retry downloads to complete
-                await Promise.all(retryPromises);
             }
 
             // Final verification and report

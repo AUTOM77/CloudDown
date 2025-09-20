@@ -40,6 +40,8 @@ jobs:
     - name: Generate CRX file
       run: |
         cp CloudDown.zip CloudDown.crx
+        mv CloudDown.zip CloudDown-${{ steps.version.outputs.version }}.zip
+        mv CloudDown.crx CloudDown-${{ steps.version.outputs.version }}.crx
 
     - name: Generate update.xml
       run: |
@@ -61,8 +63,8 @@ jobs:
         prerelease: false
         overwrite_files: true
         files: |
-          CloudDown.crx
-          CloudDown.zip
+          CloudDown-${{ steps.version.outputs.version }}.zip
+          CloudDown-${{ steps.version.outputs.version }}.crx
           update.xml
         body: |
           ## CloudDown v${{ steps.version.outputs.version }}
