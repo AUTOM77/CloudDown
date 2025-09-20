@@ -127,18 +127,76 @@
     }
 
     async function getAllFilesViaAPI() {
+        // First, try to get the current folder ID from DOM
+        let folderIdFromDOM = getCurrentFolderIdFromDOM();
+        console.log(`[CloudDown] Initial folder ID from DOM: ${folderIdFromDOM}`);
+
+        let finalFolderId = folderIdFromDOM;
+
+        // If DOM returned null or we need to verify, get folder ID from first file
+        if (folderIdFromDOM === null || (folderIdFromDOM !== '0' && document.querySelector("tr.ant-table-row[data-row-key]"))) {
+            console.log("[CloudDown] Getting actual folder ID from first file...");
+
+            const firstFid = document.querySelector("tr.ant-table-row[data-row-key]")?.getAttribute("data-row-key");
+            if (firstFid) {
+                try {
+                    // Use the correct API endpoint for file info
+                    const response = await fetch(
+                        `https://drive-pc.quark.cn/1/clouddrive/file/info?pr=ucpro&fr=pc&uc_param_str=`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "accept": "application/json, text/plain, */*",
+                                "content-type": "application/json;charset=UTF-8",
+                                "sec-fetch-dest": "empty",
+                                "sec-fetch-mode": "cors",
+                                "sec-fetch-site": "same-site"
+                            },
+                            referrer: "https://pan.quark.cn/",
+                            body: JSON.stringify({
+                                fids: [firstFid]
+                            }),
+                            mode: "cors",
+                            credentials: "include"
+                        }
+                    );
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log("[CloudDown] File info response:", data);
+
+                        if (data.data && data.data.length > 0 && data.data[0].pdir_fid) {
+                            finalFolderId = data.data[0].pdir_fid;
+                            console.log(`[CloudDown] ✓ Got current folder ID from first file's parent: ${finalFolderId}`);
+                        } else if (data.data && data.data.length > 0) {
+                            // If no pdir_fid, we might be in root
+                            console.log("[CloudDown] File has no pdir_fid, likely in root folder");
+                            finalFolderId = '0';
+                        }
+                    } else {
+                        console.error(`[CloudDown] File info API error: ${response.status}`);
+                        // Fallback to root if API fails
+                        finalFolderId = finalFolderId || '0';
+                    }
+                } catch (error) {
+                    console.error("[CloudDown] Error getting folder ID from file:", error);
+                    finalFolderId = finalFolderId || '0';
+                }
+            } else {
+                console.log("[CloudDown] No files in table to get folder ID from");
+                finalFolderId = finalFolderId || '0';
+            }
+        }
+
         const allFiles = [];
         let page = 1;
         const pageSize = 100; // Fetch more files per request
         let hasMore = true;
 
-        // Extract folder ID from URL or find it from the page
-        const pdirFid = await getCurrentFolderId();
-
         while (hasMore) {
             try {
                 const response = await fetch(
-                    `https://drive-pc.quark.cn/1/clouddrive/file/sort?pr=ucpro&fr=pc&uc_param_str=&pdir_fid=${pdirFid}&_page=${page}&_size=${pageSize}&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc`,
+                    `https://drive-pc.quark.cn/1/clouddrive/file/sort?pr=ucpro&fr=pc&uc_param_str=&pdir_fid=${finalFolderId}&_page=${page}&_size=${pageSize}&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc`,
                     {
                         headers: {
                             "accept": "application/json, text/plain, */*",
@@ -197,66 +255,88 @@
         return allFiles;
     }
 
-    async function getCurrentFolderId() {
-        // First try to get from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        let folderId = urlParams.get('id');
+    function getCurrentFolderIdFromDOM() {
+        console.log("[CloudDown] Extracting folder ID from DOM...");
 
-        if (folderId) {
-            console.log(`[CloudDown] Folder ID from URL: ${folderId}`);
-            return folderId;
+        // The URL parameter ?id= is the PARENT folder ID when viewing a subfolder
+        // We need to find the CURRENT folder ID instead
+        const urlParams = new URLSearchParams(window.location.search);
+        const parentFolderId = urlParams.get('id');
+        if (parentFolderId) {
+            console.log(`[CloudDown] Parent folder ID from URL: ${parentFolderId} (not using this)`);
         }
 
-        // If no ID in URL, we need to get the current folder ID from the page
-        // Try to make an API call to get current folder info
-        try {
-            // Get the first file element to extract its parent folder ID
-            const firstFileRow = document.querySelector("tr.ant-table-row[data-row-key]");
-            if (firstFileRow) {
-                const firstFid = firstFileRow.getAttribute("data-row-key");
-                if (firstFid) {
-                    // Make API call to get file info which includes parent folder ID
-                    const response = await fetch(
-                        `https://drive-pc.quark.cn/1/clouddrive/file?pr=ucpro&fr=pc&uc_param_str=&fids=${firstFid}`,
-                        {
-                            headers: {
-                                "accept": "application/json, text/plain, */*",
-                                "cache-control": "no-cache",
-                                "sec-fetch-dest": "empty",
-                                "sec-fetch-mode": "cors",
-                                "sec-fetch-site": "same-site"
-                            },
-                            referrer: "https://pan.quark.cn/",
-                            method: "GET",
-                            mode: "cors",
-                            credentials: "include"
-                        }
-                    );
+        // Method 2: Look for folder ID in DOM attributes
+        // Quark might store folder ID in data attributes
+        const elements = document.querySelectorAll('[data-fid], [data-folder-id], [data-pdir-fid]');
+        for (const el of elements) {
+            const fid = el.dataset.fid || el.dataset.folderId || el.dataset.pdirFid;
+            if (fid && fid.length === 32) { // Folder IDs are typically 32 characters
+                console.log(`[CloudDown] ✓ Folder ID from data attribute: ${fid}`);
+                return fid;
+            }
+        }
 
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.data && data.data[0] && data.data[0].pdir_fid) {
-                            folderId = data.data[0].pdir_fid;
-                            console.log(`[CloudDown] Folder ID from file info: ${folderId}`);
-                            return folderId;
-                        }
+        // Method 3: Check React props in DOM elements
+        // React often stores props in special properties
+        const mainContent = document.querySelector('.section-main, .ant-table-wrapper, [class*="FileList"]');
+        if (mainContent) {
+            // Look for React fiber or props
+            const reactKeys = Object.keys(mainContent).filter(key =>
+                key.startsWith('__react') || key.startsWith('_react')
+            );
+
+            for (const key of reactKeys) {
+                try {
+                    const props = mainContent[key]?.memoizedProps || mainContent[key]?.pendingProps;
+                    if (props?.folderId || props?.pdirFid || props?.pdir_fid) {
+                        const fid = props.folderId || props.pdirFid || props.pdir_fid;
+                        console.log(`[CloudDown] ✓ Folder ID from React props: ${fid}`);
+                        return fid;
+                    }
+                } catch (e) {
+                    // Continue if can't access React internals
+                }
+            }
+        }
+
+        // Method 4: Extract from breadcrumb links
+        const breadcrumb = document.querySelector('.ant-breadcrumb');
+        if (breadcrumb) {
+            // Get the current (last) breadcrumb item
+            const currentItem = breadcrumb.querySelector('.ant-breadcrumb-link:last-child') ||
+                               breadcrumb.querySelector('[aria-current="page"]');
+            if (currentItem) {
+                const href = currentItem.getAttribute('href') || currentItem.querySelector('a')?.getAttribute('href');
+                if (href) {
+                    const match = href.match(/[?&]id=([a-f0-9]{32})/);
+                    if (match) {
+                        console.log(`[CloudDown] ✓ Folder ID from breadcrumb: ${match[1]}`);
+                        return match[1];
                     }
                 }
             }
-        } catch (error) {
-            console.error("[CloudDown] Error getting folder ID from API:", error);
         }
 
-        // Check if we're in root folder
-        const isRoot = window.location.pathname === '/list' && !window.location.search.includes('id=');
-        if (isRoot) {
-            console.log("[CloudDown] In root folder");
+        // Method 5: Check if we're in root folder
+        // Root folder has no URL parameter, or the page shows "全部文件"
+        if (!parentFolderId) {
+            const pageTitle = document.querySelector('[class*="title"], [class*="header"]');
+            if (pageTitle) {
+                const titleText = pageTitle.textContent;
+                if (titleText === '全部文件' || titleText === '我的文件') {
+                    console.log("[CloudDown] In root folder (no URL param and root title)");
+                    return '0';
+                }
+            }
+            // No parent ID in URL usually means root
+            console.log("[CloudDown] In root folder (no URL parameter)");
             return '0';
         }
 
-        // Default to root if we can't determine
-        console.log("[CloudDown] Using default root folder");
-        return '0';
+        // If we can't find the current folder ID from DOM, we need to get it from files
+        console.log("[CloudDown] Current folder ID not found in DOM, will get from file info");
+        return null; // Return null to indicate we need to get it from file API
     }
 
     function updateButton(text, showSpinner = false) {
