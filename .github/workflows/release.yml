@@ -11,6 +11,7 @@ on:
     branches:
       - "master"
     paths:
+      - "content.js"
       - "manifest.json"
       - ".github/workflows/release.yml"
   workflow_dispatch:

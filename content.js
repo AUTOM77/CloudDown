@@ -133,7 +133,7 @@
         let hasMore = true;
 
         // Extract folder ID from URL or find it from the page
-        const pdirFid = getCurrentFolderId();
+        const pdirFid = await getCurrentFolderId();
 
         while (hasMore) {
             try {
@@ -197,41 +197,66 @@
         return allFiles;
     }
 
-    function getCurrentFolderId() {
+    async function getCurrentFolderId() {
+        // First try to get from URL
         const urlParams = new URLSearchParams(window.location.search);
         let folderId = urlParams.get('id');
 
-        if (!folderId) {
-            // Try to extract from current page state or breadcrumb
-            const breadcrumbItems = document.querySelectorAll('.ant-breadcrumb-link');
-            if (breadcrumbItems.length > 0) {
-                const lastItem = breadcrumbItems[breadcrumbItems.length - 1];
-                const href = lastItem.getAttribute('href');
-                if (href) {
-                    const match = href.match(/id=([^&]+)/);
-                    if (match) {
-                        folderId = match[1];
+        if (folderId) {
+            console.log(`[CloudDown] Folder ID from URL: ${folderId}`);
+            return folderId;
+        }
+
+        // If no ID in URL, we need to get the current folder ID from the page
+        // Try to make an API call to get current folder info
+        try {
+            // Get the first file element to extract its parent folder ID
+            const firstFileRow = document.querySelector("tr.ant-table-row[data-row-key]");
+            if (firstFileRow) {
+                const firstFid = firstFileRow.getAttribute("data-row-key");
+                if (firstFid) {
+                    // Make API call to get file info which includes parent folder ID
+                    const response = await fetch(
+                        `https://drive-pc.quark.cn/1/clouddrive/file?pr=ucpro&fr=pc&uc_param_str=&fids=${firstFid}`,
+                        {
+                            headers: {
+                                "accept": "application/json, text/plain, */*",
+                                "cache-control": "no-cache",
+                                "sec-fetch-dest": "empty",
+                                "sec-fetch-mode": "cors",
+                                "sec-fetch-site": "same-site"
+                            },
+                            referrer: "https://pan.quark.cn/",
+                            method: "GET",
+                            mode: "cors",
+                            credentials: "include"
+                        }
+                    );
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.data && data.data[0] && data.data[0].pdir_fid) {
+                            folderId = data.data[0].pdir_fid;
+                            console.log(`[CloudDown] Folder ID from file info: ${folderId}`);
+                            return folderId;
+                        }
                     }
                 }
             }
+        } catch (error) {
+            console.error("[CloudDown] Error getting folder ID from API:", error);
         }
 
-        if (!folderId) {
-            const isRoot = window.location.pathname === '/list' && !window.location.search.includes('id=');
-            if (isRoot) {
-                folderId = '0';
-            }
+        // Check if we're in root folder
+        const isRoot = window.location.pathname === '/list' && !window.location.search.includes('id=');
+        if (isRoot) {
+            console.log("[CloudDown] In root folder");
+            return '0';
         }
 
-        if (!folderId) {
-            const firstRow = document.querySelector("tr.ant-table-row[data-row-key]");
-            if (firstRow) {
-                folderId = '0';
-            }
-        }
-
-        console.log(`[CloudDown] Current folder ID: ${folderId || '0'}`);
-        return folderId || '0';
+        // Default to root if we can't determine
+        console.log("[CloudDown] Using default root folder");
+        return '0';
     }
 
     function updateButton(text, showSpinner = false) {
