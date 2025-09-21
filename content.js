@@ -101,6 +101,9 @@
             // Try API method first
             for (let i = 0; i < fids.length; i++) {
                 try {
+                    const requestBody = { fids: [fids[i]] };
+                    console.log(`[CloudDown] 请求下载链接 ${i + 1}/${fids.length}, FID: ${fids[i]}`);
+
                     const response = await fetch(
                         "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&uc_param_str=",
                         {
@@ -109,7 +112,7 @@
                                 "accept": "application/json, text/plain, */*",
                                 "content-type": "application/json;charset=UTF-8",
                             },
-                            body: JSON.stringify({ fids: [fids[i]] }),
+                            body: JSON.stringify(requestBody),
                             credentials: "include",
                             signal: abortController ? abortController.signal : undefined
                         }
@@ -125,11 +128,15 @@
                             });
                         } else {
                             apiFailures++;
-                            console.warn(`[CloudDown] API返回空数据: 文件 ${i + 1}`);
+                            console.warn(`[CloudDown] API返回空数据: 文件 ${i + 1}, FID: ${fids[i]}`);
+                            console.log(`[CloudDown] Raw response:`, data);
                         }
                     } else {
                         apiFailures++;
-                        console.warn(`[CloudDown] API请求失败: 文件 ${i + 1}, 状态 ${response.status}`);
+                        const responseText = await response.text();
+                        console.warn(`[CloudDown] API请求失败: 文件 ${i + 1}, FID: ${fids[i]}, 状态: ${response.status}`);
+                        console.log(`[CloudDown] Raw response:`, responseText);
+                        console.log(`[CloudDown] Response headers:`, Object.fromEntries(response.headers.entries()));
                     }
                 } catch (error) {
                     console.error(`[CloudDown] 获取文件 ${i + 1} 链接失败:`, error);
