@@ -304,13 +304,12 @@
                 return;
             }
 
-            // Update downloadLinks to only selected files
+            // Use selected files for download
             if (userAction.action === 'download') {
-                downloadLinks = userAction.files;
-                console.log(`[CloudDown] User selected ${downloadLinks.length} files for download`);
-            }
+                const selectedFiles = userAction.files;
+                console.log(`[CloudDown] User selected ${selectedFiles.length} files for download`);
 
-            const updateProgress = (current, total, failed = 0, status = '') => {
+                const updateProgress = (current, total, failed = 0, status = '') => {
                 button.textContent = "";
                 const svg = createSpinnerSVG();
                 const span = document.createElement("span");
@@ -379,15 +378,15 @@
                 }
             };
 
-            console.log(`[CloudDown] Starting sequential download of ${downloadLinks.length} files...`);
+            console.log(`[CloudDown] Starting sequential download of ${selectedFiles.length} files...`);
 
             let criticalFailure = false;
 
-            for (let i = 0; i < downloadLinks.length; i++) {
+            for (let i = 0; i < selectedFiles.length; i++) {
                 if (abortController?.signal.aborted) break;
 
-                const link = downloadLinks[i];
-                updateProgress(i + 1, downloadLinks.length, failedDownloads.length, '[下载中]');
+                const link = selectedFiles[i];
+                updateProgress(i + 1, selectedFiles.length, failedDownloads.length, '[下载中]');
 
                 const success = await downloadFile(link);
 
@@ -403,7 +402,7 @@
                     break;
                 }
 
-                if (i < downloadLinks.length - 1) {
+                if (i < selectedFiles.length - 1) {
                     await sleep(1000);
                 }
             }
@@ -418,7 +417,7 @@
                     if (abortController?.signal.aborted) break;
 
                     const link = retryList[i];
-                    updateProgress(completedCount + i + 1, downloadLinks.length, 0, '[重试中]');
+                    updateProgress(completedCount + i + 1, selectedFiles.length, 0, '[重试中]');
 
                     console.log(`[CloudDown] Final retry for: ${link.name}`);
                     const success = await downloadFile(link, 0);
@@ -443,11 +442,11 @@
 
             if (criticalFailure) {
                 const totalProcessed = completedCount + failedDownloads.length;
-                const remaining = downloadLinks.length - totalProcessed;
+                const remaining = selectedFiles.length - totalProcessed;
 
                 console.log(`[CloudDown] ===== Download ABORTED =====`);
                 console.log(`[CloudDown] Critical failure detected - fail-fast mode activated`);
-                console.log(`[CloudDown] Completed: ${completedCount}/${downloadLinks.length}`);
+                console.log(`[CloudDown] Completed: ${completedCount}/${selectedFiles.length}`);
                 console.log(`[CloudDown] Failed: ${failedDownloads.length}`);
                 console.log(`[CloudDown] Remaining (not attempted): ${remaining}`);
 
@@ -457,14 +456,14 @@
 
                 showNotification(
                     `下载失败！\n` +
-                    `已完成: ${completedCount}/${downloadLinks.length}\n` +
+                    `已完成: ${completedCount}/${selectedFiles.length}\n` +
                     `失败文件: ${failedDownloads[0]?.name || 'Unknown'}\n` +
                     `操作已中止`
                 );
             } else {
-                const totalSuccess = downloadLinks.length - failedDownloads.length;
+                const totalSuccess = selectedFiles.length - failedDownloads.length;
                 console.log(`[CloudDown] ===== Download Complete =====`);
-                console.log(`[CloudDown] Success: ${totalSuccess}/${downloadLinks.length}`);
+                console.log(`[CloudDown] Success: ${totalSuccess}/${selectedFiles.length}`);
 
                 if (failedDownloads.length > 0) {
                     console.error(`[CloudDown] Failed downloads (${failedDownloads.length}):`,
@@ -474,11 +473,12 @@
                     const moreText = failedDownloads.length > 5 ? `\n... 和其他 ${failedDownloads.length - 5} 个文件` : '';
                     showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}${moreText}`);
                 } else {
-                    showNotification(`CloudDown 成功下载全部 ${downloadLinks.length} 个文件！`);
+                    showNotification(`CloudDown 成功下载全部 ${selectedFiles.length} 个文件！`);
                 }
             }
 
             resetButton(button, buttonContent);
+            }  // End of if (userAction.action === 'download')
         } catch (error) {
             console.error("[CloudDown] 批量下载错误:", error);
             showNotification("批量下载失败，请查看控制台了解详情");
