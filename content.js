@@ -319,22 +319,121 @@
                 const maxRetries = 3;
 
                 try {
-                    console.log(`[CloudDown] Downloading (${completedCount + 1}/${downloadLinks.length}): ${link.name}`);
+                    console.log(`[CloudDown] Checking file size for: ${link.name}`);
 
-                    // Simple fetch without Range headers - Quark blocks Range requests with 403
-                    const response = await fetch(link.url, {
-                        method: 'GET',
+                    // First, get the file size with HEAD request
+                    const headResponse = await fetch(link.url, {
+                        method: 'HEAD',
                         mode: 'cors',
                         credentials: 'include',
                         signal: abortController?.signal
                     });
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                    if (!headResponse.ok) {
+                        throw new Error(`HEAD request failed: ${headResponse.status}`);
                     }
 
-                    // Get the complete blob from response
-                    const blob = await response.blob();
+                    const contentLength = parseInt(headResponse.headers.get('content-length') || '0');
+                    const acceptRanges = headResponse.headers.get('accept-ranges');
+
+                    console.log(`[CloudDown] File: ${link.name}, Size: ${Math.round(contentLength / 1024 / 1024)}MB, Ranges: ${acceptRanges}`);
+
+                    let blob;
+
+                    // Try two-chunk download if Range is supported and file is larger than 1MB
+                    if (acceptRanges === 'bytes' && contentLength > 1024 * 1024) {
+                        const midPoint = Math.floor(contentLength / 2);
+
+                        console.log(`[CloudDown] Downloading in 2 chunks: ${link.name}`);
+                        updateProgress(
+                            completedCount + 1,
+                            downloadLinks.length,
+                            failedDownloads.length,
+                            '[0%]'
+                        );
+
+                        // Download two chunks concurrently
+                        const chunkPromises = [
+                            // First half
+                            fetch(link.url, {
+                                method: 'GET',
+                                headers: {
+                                    'Range': `bytes=0-${midPoint - 1}`
+                                },
+                                mode: 'cors',
+                                credentials: 'include',
+                                signal: abortController?.signal
+                            }).then(async (response) => {
+                                if (response.status !== 206) {
+                                    throw new Error(`Chunk 1 failed: ${response.status} (expected 206)`);
+                                }
+                                const blob = await response.blob();
+                                console.log(`[CloudDown] Chunk 1/2 complete: ${Math.round(blob.size / 1024)}KB`);
+                                updateProgress(
+                                    completedCount + 1,
+                                    downloadLinks.length,
+                                    failedDownloads.length,
+                                    '[50%]'
+                                );
+                                return { index: 0, blob };
+                            }),
+
+                            // Second half
+                            fetch(link.url, {
+                                method: 'GET',
+                                headers: {
+                                    'Range': `bytes=${midPoint}-${contentLength - 1}`
+                                },
+                                mode: 'cors',
+                                credentials: 'include',
+                                signal: abortController?.signal
+                            }).then(async (response) => {
+                                if (response.status !== 206) {
+                                    throw new Error(`Chunk 2 failed: ${response.status} (expected 206)`);
+                                }
+                                const blob = await response.blob();
+                                console.log(`[CloudDown] Chunk 2/2 complete: ${Math.round(blob.size / 1024)}KB`);
+                                return { index: 1, blob };
+                            })
+                        ];
+
+                        // Wait for both chunks
+                        const chunks = await Promise.all(chunkPromises);
+                        chunks.sort((a, b) => a.index - b.index);
+
+                        // Merge chunks
+                        console.log(`[CloudDown] Merging chunks for: ${link.name}`);
+                        blob = new Blob([chunks[0].blob, chunks[1].blob], { type: 'application/octet-stream' });
+
+                        // Verify size
+                        if (blob.size !== contentLength) {
+                            throw new Error(`Size mismatch: expected ${contentLength}, got ${blob.size}`);
+                        }
+
+                        updateProgress(
+                            completedCount + 1,
+                            downloadLinks.length,
+                            failedDownloads.length,
+                            '[100%]'
+                        );
+
+                    } else {
+                        // Fallback to regular download
+                        console.log(`[CloudDown] Regular download (no chunking): ${link.name}`);
+
+                        const response = await fetch(link.url, {
+                            method: 'GET',
+                            mode: 'cors',
+                            credentials: 'include',
+                            signal: abortController?.signal
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`Download failed: ${response.status}`);
+                        }
+
+                        blob = await response.blob();
+                    }
 
                     // Wait to ensure file is fully received
                     await sleep(500);
@@ -356,6 +455,7 @@
                     completedCount++;
                     console.log(`[CloudDown] ✓ Successfully downloaded (${completedCount}/${downloadLinks.length}): ${link.name}`);
                     return true;
+
                 } catch (error) {
                     if (error.name === 'AbortError') {
                         console.log(`[CloudDown] Download aborted: ${link.name}`);
@@ -375,7 +475,9 @@
 
             console.log(`[CloudDown] Starting sequential download of ${downloadLinks.length} files...`);
 
-            // Process downloads strictly one by one
+            // Process downloads strictly one by one with fail-fast behavior
+            let criticalFailure = false;
+
             for (let i = 0; i < downloadLinks.length; i++) {
                 if (abortController?.signal.aborted) break;
 
@@ -386,7 +488,15 @@
 
                 if (!success) {
                     failedDownloads.push(link);
-                    console.error(`[CloudDown] Failed after retries: ${link.name}`);
+                    console.error(`[CloudDown] CRITICAL: Failed after retries: ${link.name}`);
+                    console.error(`[CloudDown] Aborting all remaining downloads due to failure`);
+                    criticalFailure = true;
+
+                    // Abort all remaining downloads
+                    if (abortController) {
+                        abortController.abort();
+                    }
+                    break; // Stop processing more files
                 }
 
                 // Wait between downloads to ensure connection is closed
@@ -395,8 +505,8 @@
                 }
             }
 
-            // Retry failed downloads sequentially
-            if (failedDownloads.length > 0) {
+            // Skip retry if critical failure occurred (fail-fast mode)
+            if (!criticalFailure && failedDownloads.length > 0) {
                 console.log(`[CloudDown] ===== Retrying ${failedDownloads.length} failed downloads =====`);
 
                 const retryList = [...failedDownloads];
@@ -413,6 +523,14 @@
 
                     if (!success) {
                         failedDownloads.push(link);
+                        console.error(`[CloudDown] CRITICAL: Retry failed for ${link.name}`);
+                        console.error(`[CloudDown] Aborting all operations due to failure`);
+                        criticalFailure = true;
+
+                        if (abortController) {
+                            abortController.abort();
+                        }
+                        break;
                     }
 
                     // Wait between retry downloads
@@ -423,20 +541,42 @@
             }
 
             // Final verification and report
-            const totalSuccess = downloadLinks.length - failedDownloads.length;
-            console.log(`[CloudDown] ===== Download Complete =====`);
-            console.log(`[CloudDown] Success: ${totalSuccess}/${downloadLinks.length}`);
+            if (criticalFailure) {
+                const totalProcessed = completedCount + failedDownloads.length;
+                const remaining = downloadLinks.length - totalProcessed;
 
-            if (failedDownloads.length > 0) {
-                console.error(`[CloudDown] Failed downloads (${failedDownloads.length}):`,
-                    failedDownloads.map(f => f.name));
+                console.log(`[CloudDown] ===== Download ABORTED =====`);
+                console.log(`[CloudDown] Critical failure detected - fail-fast mode activated`);
+                console.log(`[CloudDown] Completed: ${completedCount}/${downloadLinks.length}`);
+                console.log(`[CloudDown] Failed: ${failedDownloads.length}`);
+                console.log(`[CloudDown] Remaining (not attempted): ${remaining}`);
 
-                // Show failed files to user
-                const failedNames = failedDownloads.slice(0, 5).map(f => f.name).join('\n');
-                const moreText = failedDownloads.length > 5 ? `\n... 和其他 ${failedDownloads.length - 5} 个文件` : '';
-                showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}${moreText}`);
+                if (failedDownloads.length > 0) {
+                    console.error(`[CloudDown] Failed file:`, failedDownloads[0].name);
+                }
+
+                showNotification(
+                    `下载失败！\n` +
+                    `已完成: ${completedCount}/${downloadLinks.length}\n` +
+                    `失败文件: ${failedDownloads[0]?.name || 'Unknown'}\n` +
+                    `操作已中止`
+                );
             } else {
-                showNotification(`CloudDown 成功下载全部 ${downloadLinks.length} 个文件！`);
+                const totalSuccess = downloadLinks.length - failedDownloads.length;
+                console.log(`[CloudDown] ===== Download Complete =====`);
+                console.log(`[CloudDown] Success: ${totalSuccess}/${downloadLinks.length}`);
+
+                if (failedDownloads.length > 0) {
+                    console.error(`[CloudDown] Failed downloads (${failedDownloads.length}):`,
+                        failedDownloads.map(f => f.name));
+
+                    // Show failed files to user
+                    const failedNames = failedDownloads.slice(0, 5).map(f => f.name).join('\n');
+                    const moreText = failedDownloads.length > 5 ? `\n... 和其他 ${failedDownloads.length - 5} 个文件` : '';
+                    showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}${moreText}`);
+                } else {
+                    showNotification(`CloudDown 成功下载全部 ${downloadLinks.length} 个文件！`);
+                }
             }
 
             resetButton(button, buttonContent);
