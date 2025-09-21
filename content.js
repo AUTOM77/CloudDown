@@ -101,7 +101,6 @@
 
             updateButton("正在获取下载链接...", true);
 
-            // Get download links for all files
             const downloadLinks = [];
             for (let i = 0; i < fids.length; i++) {
                 try {
@@ -135,11 +134,21 @@
 
             resetButton(button, buttonContent);
 
-            // Format links - just URLs, one per line
-            const linksList = downloadLinks.map(link => link.url).join('\n');
-            console.log("[CloudDown] 下载链接列表:\n", linksList);
+            // Helper function to get file icon
+            function getFileIcon(ext) {
+                const icons = {
+                    pdf: '📄', doc: '📝', docx: '📝', txt: '📋',
+                    jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️',
+                    mp4: '🎬', avi: '🎬', mkv: '🎬', mov: '🎬',
+                    mp3: '🎵', wav: '🎵', flac: '🎵',
+                    zip: '📦', rar: '📦', '7z': '📦',
+                    js: '💻', html: '💻', css: '💻',
+                    xls: '📊', xlsx: '📊', csv: '📊',
+                    ppt: '📽️', pptx: '📽️'
+                };
+                return icons[ext] || '📎';
+            }
 
-            // Create a modal dialog with textarea for links
             const modal = document.createElement('div');
             modal.style.cssText = `
                 position: fixed;
@@ -147,74 +156,58 @@
                 left: 50%;
                 transform: translate(-50%, -50%);
                 background: white;
-                border-radius: 8px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                border-radius: 12px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.15);
                 z-index: 10000;
-                padding: 20px;
-                max-width: 700px;
+                padding: 0;
+                max-width: 900px;
                 width: 90%;
-                max-height: 80vh;
+                max-height: 85vh;
                 display: flex;
                 flex-direction: column;
             `;
 
             modal.innerHTML = `
-                <h3 style="margin: 0 0 15px 0; color: #333;">CloudDown - 成功获取 ${downloadLinks.length} 个下载链接</h3>
-                <div style="margin-bottom: 10px; color: #666; font-size: 14px;">
-                    <p style="margin: 5px 0;">✓ 所有链接已获取成功</p>
-                    <p style="margin: 5px 0;">• 点击"复制全部链接"复制到剪贴板</p>
-                    <p style="margin: 5px 0;">• 可以使用 IDM、迅雷等下载工具批量下载</p>
+                <div style="padding: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px 12px 0 0;">
+                    <h2 style="margin: 0; color: white; font-size: 20px;">CloudDown 批量下载</h2>
+                    <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">找到 ${downloadLinks.length} 个文件</p>
                 </div>
-                <textarea id="clouddown-links" style="
-                    width: 100%;
-                    height: 300px;
-                    padding: 10px;
-                    border: 1px solid #ddd;
-                    border-radius: 4px;
-                    font-family: monospace;
-                    font-size: 12px;
-                    resize: vertical;
-                    box-sizing: border-box;
-                    background: #f9f9f9;
-                " readonly>${linksList}</textarea>
-                <div style="display: flex; gap: 10px; justify-content: space-between; margin-top: 15px;">
-                    <div style="color: #666; font-size: 12px;">
-                        共 ${downloadLinks.length} 个文件
-                    </div>
-                    <div style="display: flex; gap: 10px;">
-                        <button id="clouddown-copy" style="
-                            padding: 10px 24px;
-                            background: #4a9eff;
-                            color: white;
-                            border: none;
-                            border-radius: 4px;
-                            cursor: pointer;
-                            font-size: 14px;
-                            font-weight: 500;
-                        ">复制全部链接</button>
-                        <button id="clouddown-download" style="
-                            padding: 10px 24px;
-                            background: #52c41a;
-                            color: white;
-                            border: none;
-                            border-radius: 4px;
-                            cursor: pointer;
-                            font-size: 14px;
-                        ">浏览器下载</button>
-                        <button id="clouddown-cancel" style="
-                            padding: 10px 24px;
-                            background: #fff;
-                            border: 1px solid #ddd;
-                            border-radius: 4px;
-                            cursor: pointer;
-                            font-size: 14px;
-                        ">关闭</button>
+                <div style="padding: 16px; border-bottom: 1px solid #f0f0f0;">
+                    <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 12px;">
+                        <input type="checkbox" id="select-all" checked style="width: 18px; height: 18px; margin-right: 8px;">
+                        <span style="font-weight: 500;">全选/取消全选</span>
+                    </label>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #666; font-size: 13px;">已选: <span id="selected-count" style="font-weight: bold; color: #1890ff;">${downloadLinks.length}</span> 个</span>
+                        <button id="copy-selected" style="padding: 6px 16px; background: white; border: 1px solid #d9d9d9; border-radius: 6px; cursor: pointer; font-size: 13px;">复制选中链接</button>
                     </div>
                 </div>
-                <div id="clouddown-status" style="margin-top: 10px; color: #4CAF50; display: none; text-align: center;"></div>
+                <div style="flex: 1; overflow-y: auto; padding: 16px; max-height: 400px;">
+                    <div id="file-list">
+                        ${downloadLinks.map((link, index) => {
+                            const ext = link.name.split('.').pop().toLowerCase();
+                            const icon = getFileIcon(ext);
+                            return `
+                                <label style="display: flex; align-items: center; padding: 10px; margin-bottom: 8px; background: #fafafa; border-radius: 8px; cursor: pointer; transition: background 0.2s;"
+                                    onmouseover="this.style.background='#f0f5ff'" onmouseout="this.style.background='#fafafa'">
+                                    <input type="checkbox" class="file-checkbox" data-index="${index}" checked style="width: 16px; height: 16px; margin-right: 10px;">
+                                    <span style="font-size: 18px; margin-right: 8px;">${icon}</span>
+                                    <span style="flex: 1; font-size: 13px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${link.name}">${link.name}</span>
+                                </label>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+                <div style="padding: 20px; border-top: 1px solid #e8e8e8; display: flex; justify-content: space-between;">
+                    <div style="font-size: 13px; color: #666;">提示：建议使用专业下载工具</div>
+                    <div style="display: flex; gap: 12px;">
+                        <button id="clouddown-cancel" style="padding: 10px 24px; background: white; border: 1px solid #d9d9d9; border-radius: 6px; cursor: pointer;">取消</button>
+                        <button id="clouddown-download" style="padding: 10px 32px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">开始下载</button>
+                    </div>
+                </div>
+                <div id="clouddown-status" style="display: none;"></div>
             `;
 
-            // Create overlay
             const overlay = document.createElement('div');
             overlay.style.cssText = `
                 position: fixed;
@@ -229,74 +222,92 @@
             document.body.appendChild(overlay);
             document.body.appendChild(modal);
 
-            // Wait for user action
             const userAction = await new Promise((resolve) => {
-                const copyBtn = modal.querySelector('#clouddown-copy');
                 const downloadBtn = modal.querySelector('#clouddown-download');
                 const cancelBtn = modal.querySelector('#clouddown-cancel');
-                const statusDiv = modal.querySelector('#clouddown-status');
-                const linksTextarea = modal.querySelector('#clouddown-links');
+                const selectAllBtn = modal.querySelector('#select-all');
+                const copySelectedBtn = modal.querySelector('#copy-selected');
+                const fileCheckboxes = modal.querySelectorAll('.file-checkbox');
+                const selectedCount = modal.querySelector('#selected-count');
 
-                // Auto-select all text when clicking textarea
-                linksTextarea.onclick = () => {
-                    linksTextarea.select();
+                // Update selected count
+                const updateSelectedCount = () => {
+                    const checked = modal.querySelectorAll('.file-checkbox:checked').length;
+                    selectedCount.textContent = checked;
+                    selectAllBtn.checked = checked === fileCheckboxes.length;
                 };
 
-                copyBtn.onclick = async () => {
+                // Select all/none functionality
+                selectAllBtn.onchange = () => {
+                    fileCheckboxes.forEach(cb => cb.checked = selectAllBtn.checked);
+                    updateSelectedCount();
+                };
+
+                // Individual checkbox change
+                fileCheckboxes.forEach(cb => {
+                    cb.onchange = updateSelectedCount;
+                });
+
+                // Copy selected links
+                copySelectedBtn.onclick = async () => {
+                    const selectedIndices = Array.from(modal.querySelectorAll('.file-checkbox:checked'))
+                        .map(cb => parseInt(cb.dataset.index));
+                    const selectedLinks = selectedIndices.map(i => downloadLinks[i].url).join('\n');
+
                     try {
-                        // Select all text in textarea
-                        linksTextarea.select();
-
-                        // Try modern clipboard API first
-                        try {
-                            await navigator.clipboard.writeText(linksList);
-                            statusDiv.textContent = '✓ 已复制全部链接到剪贴板！';
-                            statusDiv.style.display = 'block';
-                            copyBtn.textContent = '✓ 已复制';
-                            copyBtn.style.background = '#52c41a';
-                        } catch (clipboardError) {
-                            // Fallback to document.execCommand
-                            document.execCommand('copy');
-                            statusDiv.textContent = '✓ 已复制全部链接到剪贴板！';
-                            statusDiv.style.display = 'block';
-                            copyBtn.textContent = '✓ 已复制';
-                            copyBtn.style.background = '#52c41a';
-                        }
-
-                        // Don't close modal after copy - user might want to copy again
+                        await navigator.clipboard.writeText(selectedLinks);
+                        const originalText = copySelectedBtn.textContent;
+                        copySelectedBtn.textContent = '✓ 已复制';
+                        copySelectedBtn.style.background = '#52c41a';
+                        copySelectedBtn.style.color = 'white';
+                        setTimeout(() => {
+                            copySelectedBtn.textContent = originalText;
+                            copySelectedBtn.style.background = 'white';
+                            copySelectedBtn.style.color = 'initial';
+                        }, 2000);
                     } catch (err) {
-                        statusDiv.textContent = '复制失败，请手动选择文本复制';
-                        statusDiv.style.color = '#f44336';
-                        statusDiv.style.display = 'block';
                         console.error("[CloudDown] 复制失败:", err);
+                        alert('复制失败，请手动复制');
                     }
                 };
 
                 downloadBtn.onclick = () => {
+                    const selectedIndices = Array.from(modal.querySelectorAll('.file-checkbox:checked'))
+                        .map(cb => parseInt(cb.dataset.index));
+
+                    if (selectedIndices.length === 0) {
+                        alert('请至少选择一个文件');
+                        return;
+                    }
+
+                    const selectedFiles = selectedIndices.map(i => downloadLinks[i]);
                     document.body.removeChild(modal);
                     document.body.removeChild(overlay);
-                    resolve('download');
+                    resolve({ action: 'download', files: selectedFiles });
                 };
 
                 cancelBtn.onclick = () => {
                     document.body.removeChild(modal);
                     document.body.removeChild(overlay);
-                    resolve('cancel');
+                    resolve({ action: 'cancel' });
                 };
 
                 overlay.onclick = () => {
                     document.body.removeChild(modal);
                     document.body.removeChild(overlay);
-                    resolve('cancel');
+                    resolve({ action: 'cancel' });
                 };
             });
 
-            if (userAction === 'copy') {
+            if (userAction.action === 'cancel') {
                 isDownloading = false;
                 return;
-            } else if (userAction === 'cancel') {
-                isDownloading = false;
-                return;
+            }
+
+            // Update downloadLinks to only selected files
+            if (userAction.action === 'download') {
+                downloadLinks = userAction.files;
+                console.log(`[CloudDown] User selected ${downloadLinks.length} files for download`);
             }
 
             const updateProgress = (current, total, failed = 0, status = '') => {
@@ -311,7 +322,6 @@
                 button.appendChild(span);
             };
 
-            // Sequential download - Quark doesn't support concurrent downloads
             const failedDownloads = [];
             let completedCount = 0;
 
@@ -319,126 +329,23 @@
                 const maxRetries = 3;
 
                 try {
-                    console.log(`[CloudDown] Checking file size for: ${link.name}`);
+                    console.log(`[CloudDown] Downloading (${completedCount + 1}/${downloadLinks.length}): ${link.name}`);
 
-                    // First, get the file size with HEAD request
-                    const headResponse = await fetch(link.url, {
-                        method: 'HEAD',
+                    const response = await fetch(link.url, {
+                        method: 'GET',
                         mode: 'cors',
                         credentials: 'include',
                         signal: abortController?.signal
                     });
 
-                    if (!headResponse.ok) {
-                        throw new Error(`HEAD request failed: ${headResponse.status}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
                     }
 
-                    const contentLength = parseInt(headResponse.headers.get('content-length') || '0');
-                    const acceptRanges = headResponse.headers.get('accept-ranges');
+                    const blob = await response.blob();
+                    console.log(`[CloudDown] Downloaded ${Math.round(blob.size / 1024 / 1024)}MB`);
 
-                    console.log(`[CloudDown] File: ${link.name}, Size: ${Math.round(contentLength / 1024 / 1024)}MB, Ranges: ${acceptRanges}`);
-
-                    let blob;
-
-                    // Try two-chunk download if Range is supported and file is larger than 1MB
-                    if (acceptRanges === 'bytes' && contentLength > 1024 * 1024) {
-                        const midPoint = Math.floor(contentLength / 2);
-
-                        console.log(`[CloudDown] Downloading in 2 chunks: ${link.name}`);
-                        updateProgress(
-                            completedCount + 1,
-                            downloadLinks.length,
-                            failedDownloads.length,
-                            '[0%]'
-                        );
-
-                        // Download two chunks concurrently
-                        const chunkPromises = [
-                            // First half
-                            fetch(link.url, {
-                                method: 'GET',
-                                headers: {
-                                    'Range': `bytes=0-${midPoint - 1}`
-                                },
-                                mode: 'cors',
-                                credentials: 'include',
-                                signal: abortController?.signal
-                            }).then(async (response) => {
-                                if (response.status !== 206) {
-                                    throw new Error(`Chunk 1 failed: ${response.status} (expected 206)`);
-                                }
-                                const blob = await response.blob();
-                                console.log(`[CloudDown] Chunk 1/2 complete: ${Math.round(blob.size / 1024)}KB`);
-                                updateProgress(
-                                    completedCount + 1,
-                                    downloadLinks.length,
-                                    failedDownloads.length,
-                                    '[50%]'
-                                );
-                                return { index: 0, blob };
-                            }),
-
-                            // Second half
-                            fetch(link.url, {
-                                method: 'GET',
-                                headers: {
-                                    'Range': `bytes=${midPoint}-${contentLength - 1}`
-                                },
-                                mode: 'cors',
-                                credentials: 'include',
-                                signal: abortController?.signal
-                            }).then(async (response) => {
-                                if (response.status !== 206) {
-                                    throw new Error(`Chunk 2 failed: ${response.status} (expected 206)`);
-                                }
-                                const blob = await response.blob();
-                                console.log(`[CloudDown] Chunk 2/2 complete: ${Math.round(blob.size / 1024)}KB`);
-                                return { index: 1, blob };
-                            })
-                        ];
-
-                        // Wait for both chunks
-                        const chunks = await Promise.all(chunkPromises);
-                        chunks.sort((a, b) => a.index - b.index);
-
-                        // Merge chunks
-                        console.log(`[CloudDown] Merging chunks for: ${link.name}`);
-                        blob = new Blob([chunks[0].blob, chunks[1].blob], { type: 'application/octet-stream' });
-
-                        // Verify size
-                        if (blob.size !== contentLength) {
-                            throw new Error(`Size mismatch: expected ${contentLength}, got ${blob.size}`);
-                        }
-
-                        updateProgress(
-                            completedCount + 1,
-                            downloadLinks.length,
-                            failedDownloads.length,
-                            '[100%]'
-                        );
-
-                    } else {
-                        // Fallback to regular download
-                        console.log(`[CloudDown] Regular download (no chunking): ${link.name}`);
-
-                        const response = await fetch(link.url, {
-                            method: 'GET',
-                            mode: 'cors',
-                            credentials: 'include',
-                            signal: abortController?.signal
-                        });
-
-                        if (!response.ok) {
-                            throw new Error(`Download failed: ${response.status}`);
-                        }
-
-                        blob = await response.blob();
-                    }
-
-                    // Wait to ensure file is fully received
                     await sleep(500);
-
-                    // Create blob URL and trigger download
                     const blobUrl = window.URL.createObjectURL(blob);
                     const a = document.createElement("a");
                     a.href = blobUrl;
@@ -448,7 +355,6 @@
                     a.click();
                     document.body.removeChild(a);
 
-                    // Wait for download to fully complete before cleanup
                     await sleep(2000);
                     window.URL.revokeObjectURL(blobUrl);
 
@@ -475,7 +381,6 @@
 
             console.log(`[CloudDown] Starting sequential download of ${downloadLinks.length} files...`);
 
-            // Process downloads strictly one by one with fail-fast behavior
             let criticalFailure = false;
 
             for (let i = 0; i < downloadLinks.length; i++) {
@@ -492,25 +397,22 @@
                     console.error(`[CloudDown] Aborting all remaining downloads due to failure`);
                     criticalFailure = true;
 
-                    // Abort all remaining downloads
                     if (abortController) {
                         abortController.abort();
                     }
-                    break; // Stop processing more files
+                    break;
                 }
 
-                // Wait between downloads to ensure connection is closed
                 if (i < downloadLinks.length - 1) {
                     await sleep(1000);
                 }
             }
 
-            // Skip retry if critical failure occurred (fail-fast mode)
             if (!criticalFailure && failedDownloads.length > 0) {
                 console.log(`[CloudDown] ===== Retrying ${failedDownloads.length} failed downloads =====`);
 
                 const retryList = [...failedDownloads];
-                failedDownloads.length = 0; // Clear failed list for retry
+                failedDownloads.length = 0;
 
                 for (let i = 0; i < retryList.length; i++) {
                     if (abortController?.signal.aborted) break;
@@ -519,7 +421,7 @@
                     updateProgress(completedCount + i + 1, downloadLinks.length, 0, '[重试中]');
 
                     console.log(`[CloudDown] Final retry for: ${link.name}`);
-                    const success = await downloadFile(link, 0); // Reset retry count
+                    const success = await downloadFile(link, 0);
 
                     if (!success) {
                         failedDownloads.push(link);
@@ -533,14 +435,12 @@
                         break;
                     }
 
-                    // Wait between retry downloads
                     if (i < retryList.length - 1) {
                         await sleep(1000);
                     }
                 }
             }
 
-            // Final verification and report
             if (criticalFailure) {
                 const totalProcessed = completedCount + failedDownloads.length;
                 const remaining = downloadLinks.length - totalProcessed;
@@ -570,7 +470,6 @@
                     console.error(`[CloudDown] Failed downloads (${failedDownloads.length}):`,
                         failedDownloads.map(f => f.name));
 
-                    // Show failed files to user
                     const failedNames = failedDownloads.slice(0, 5).map(f => f.name).join('\n');
                     const moreText = failedDownloads.length > 5 ? `\n... 和其他 ${failedDownloads.length - 5} 个文件` : '';
                     showNotification(`下载完成，但有 ${failedDownloads.length} 个文件失败:\n${failedNames}${moreText}`);
@@ -684,14 +583,12 @@
             let blob;
             let totalDownloaded = 0;
 
-            // Step 2: Download file (chunked or regular)
             if (supportsRange && contentLength > chunkSize) {
                 console.log(`[download_] Chunked download: ${filename} (${Math.ceil(contentLength / 1024 / 1024)}MB)`);
 
                 const chunks = [];
                 const totalChunks = Math.ceil(contentLength / chunkSize);
 
-                // Download chunks with concurrency control
                 for (let i = 0; i < totalChunks; i += maxConcurrent) {
                     const batchSize = Math.min(maxConcurrent, totalChunks - i);
                     const chunkPromises = [];
@@ -713,13 +610,11 @@
                                     signal
                                 });
 
-                                // Verify Content-Range header
                                 const contentRange = response.headers.get('content-range');
                                 if (response.status !== 206 || !contentRange) {
                                     throw new Error(`Invalid range response: ${response.status}, Content-Range: ${contentRange}`);
                                 }
 
-                                // Parse and validate Content-Range
                                 const rangeMatch = contentRange.match(/bytes (\d+)-(\d+)\/(\d+)/);
                                 if (!rangeMatch) {
                                     throw new Error(`Invalid Content-Range format: ${contentRange}`);
@@ -771,18 +666,15 @@
                     }
                 }
 
-                // Merge chunks
                 console.log(`[download_] Merging ${chunks.length} chunks...`);
                 blob = new Blob(chunks, { type: 'application/octet-stream' });
 
-                // Verify final size
                 if (blob.size !== contentLength) {
                     console.error(`[download_] Size mismatch: expected ${contentLength}, got ${blob.size}`);
                     return { success: false, error: `Size mismatch: expected ${contentLength}, got ${blob.size}` };
                 }
 
             } else {
-                // Regular download (no chunking)
                 console.log(`[download_] Regular download: ${filename} (no chunking)`);
 
                 for (let attempt = 0; attempt < retries; attempt++) {
@@ -798,7 +690,6 @@
                             throw new Error(`HTTP ${response.status}`);
                         }
 
-                        // Stream with progress
                         if (response.body && contentLength > 0 && onProgress) {
                             const reader = response.body.getReader();
                             const chunks = [];
@@ -817,7 +708,7 @@
                             blob = await response.blob();
                         }
 
-                        break; // Success, exit retry loop
+                        break;
 
                     } catch (error) {
                         if (attempt === retries - 1) {
@@ -830,7 +721,6 @@
                 }
             }
 
-            // Step 3: Trigger browser download
             const blobUrl = window.URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = blobUrl;
@@ -840,7 +730,6 @@
             a.click();
             document.body.removeChild(a);
 
-            // Cleanup after delay
             setTimeout(() => {
                 window.URL.revokeObjectURL(blobUrl);
             }, 5000);
