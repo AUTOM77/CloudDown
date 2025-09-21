@@ -96,6 +96,9 @@
             updateButton("正在获取下载链接...", true);
 
             const downloadLinks = [];
+            let apiFailures = 0;
+
+            // Try API method first
             for (let i = 0; i < fids.length; i++) {
                 try {
                     const response = await fetch(
@@ -117,13 +120,65 @@
                         if (data.data && data.data[0]) {
                             downloadLinks.push({
                                 url: data.data[0].download_url,
-                                name: data.data[0].file_name
+                                name: data.data[0].file_name,
+                                fid: fids[i]
                             });
+                        } else {
+                            apiFailures++;
+                            console.warn(`[CloudDown] API返回空数据: 文件 ${i + 1}`);
                         }
+                    } else {
+                        apiFailures++;
+                        console.warn(`[CloudDown] API请求失败: 文件 ${i + 1}, 状态 ${response.status}`);
                     }
                 } catch (error) {
                     console.error(`[CloudDown] 获取文件 ${i + 1} 链接失败:`, error);
+                    apiFailures++;
                 }
+            }
+
+            // If API method failed significantly, try DOM fallback
+            if (apiFailures > 0 && apiFailures >= fids.length * 0.5) { // 50% or more failed
+                console.log(`[CloudDown] API获取失败率过高 (${apiFailures}/${fids.length})，尝试DOM备用方案...`);
+
+                // Alternative: Try to get file names from DOM and construct download request
+                const fileRows = document.querySelectorAll('tr.ant-table-row[data-row-key]');
+                const missingFids = fids.filter(fid => !downloadLinks.find(dl => dl.fid === fid));
+
+                for (const fid of missingFids) {
+                    const row = document.querySelector(`tr[data-row-key="${fid}"]`);
+                    if (row) {
+                        const nameElement = row.querySelector('[class*="file-name"], [class*="name"], [title]');
+                        const fileName = nameElement ?
+                            (nameElement.textContent?.trim() || nameElement.getAttribute('title')?.trim() || `file_${fid}`) :
+                            `file_${fid}`;
+
+                        // Add placeholder entry that can be retried later
+                        downloadLinks.push({
+                            url: '', // Will need to be obtained differently
+                            name: fileName,
+                            fid: fid,
+                            needsRetry: true
+                        });
+                        console.log(`[CloudDown] 添加占位符: ${fileName}`);
+                    }
+                }
+
+                // Remove entries that need retry for now
+                const validLinks = downloadLinks.filter(link => !link.needsRetry && link.url);
+                console.log(`[CloudDown] 最终获取到 ${validLinks.length} 个有效下载链接 (共 ${fids.length} 个文件)`);
+
+                // Update downloadLinks to only include valid ones
+                downloadLinks.length = 0;
+                downloadLinks.push(...validLinks);
+            }
+
+            // Check if we got any valid download links
+            if (downloadLinks.length === 0) {
+                console.error("[CloudDown] 无法获取任何下载链接");
+                showNotification("无法获取下载链接，请稍后重试或刷新页面");
+                resetButton(button, buttonContent);
+                return;
             }
 
             resetButton(button, buttonContent);
@@ -513,6 +568,7 @@
                     .map(item => item.fid);
 
                 console.log(`[CloudDown] Total files found via API: ${fileIds.length}`);
+                console.log(`[CloudDown] File IDs:`, fileIds);
                 return fileIds;
             }
         } catch (error) {
