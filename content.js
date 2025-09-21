@@ -315,29 +315,60 @@
             const failedDownloads = [];
             let completedCount = 0;
 
-            const downloadFile = async (link) => {
-                const result = await download_(link.url, link.name, {
-                    chunkSize: 5 * 1024 * 1024, // 5MB chunks
-                    maxConcurrent: 5, // 5 parallel chunks
-                    retries: 3, // 3 retry attempts
-                    signal: abortController?.signal,
-                    onProgress: (downloaded, total) => {
-                        const percent = Math.round((downloaded / total) * 100);
-                        updateProgress(
-                            completedCount + 1,
-                            downloadLinks.length,
-                            failedDownloads.length,
-                            `[${percent}%]`
-                        );
-                    }
-                });
+            const downloadFile = async (link, retryCount = 0) => {
+                const maxRetries = 3;
 
-                if (result.success) {
+                try {
+                    console.log(`[CloudDown] Downloading (${completedCount + 1}/${downloadLinks.length}): ${link.name}`);
+
+                    // Simple fetch without Range headers - Quark blocks Range requests with 403
+                    const response = await fetch(link.url, {
+                        method: 'GET',
+                        mode: 'cors',
+                        credentials: 'include',
+                        signal: abortController?.signal
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    // Get the complete blob from response
+                    const blob = await response.blob();
+
+                    // Wait to ensure file is fully received
+                    await sleep(500);
+
+                    // Create blob URL and trigger download
+                    const blobUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = blobUrl;
+                    a.download = link.name;
+                    a.style.display = "none";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+
+                    // Wait for download to fully complete before cleanup
+                    await sleep(2000);
+                    window.URL.revokeObjectURL(blobUrl);
+
                     completedCount++;
                     console.log(`[CloudDown] ✓ Successfully downloaded (${completedCount}/${downloadLinks.length}): ${link.name}`);
                     return true;
-                } else {
-                    console.error(`[CloudDown] Failed to download ${link.name}: ${result.error}`);
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        console.log(`[CloudDown] Download aborted: ${link.name}`);
+                        return false;
+                    }
+
+                    console.error(`[CloudDown] Failed to download ${link.name}:`, error.message);
+
+                    if (retryCount < maxRetries - 1) {
+                        console.log(`[CloudDown] Retrying ${link.name} (${retryCount + 1}/${maxRetries})...`);
+                        await sleep(3000);
+                        return downloadFile(link, retryCount + 1);
+                    }
                     return false;
                 }
             };
@@ -378,7 +409,7 @@
                     updateProgress(completedCount + i + 1, downloadLinks.length, 0, '[重试中]');
 
                     console.log(`[CloudDown] Final retry for: ${link.name}`);
-                    const success = await downloadFile(link);
+                    const success = await downloadFile(link, 0); // Reset retry count
 
                     if (!success) {
                         failedDownloads.push(link);
