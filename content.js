@@ -315,60 +315,29 @@
             const failedDownloads = [];
             let completedCount = 0;
 
-            const downloadFile = async (link, retryCount = 0) => {
-                const maxRetries = 3;
-
-                try {
-                    console.log(`[CloudDown] Downloading (${completedCount + 1}/${downloadLinks.length}): ${link.name}`);
-
-                    // Use fetch to download the file completely
-                    const response = await fetch(link.url, {
-                        method: 'GET',
-                        mode: 'cors',
-                        credentials: 'include',
-                        signal: abortController?.signal
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+            const downloadFile = async (link) => {
+                const result = await download_(link.url, link.name, {
+                    chunkSize: 5 * 1024 * 1024, // 5MB chunks
+                    maxConcurrent: 5, // 5 parallel chunks
+                    retries: 3, // 3 retry attempts
+                    signal: abortController?.signal,
+                    onProgress: (downloaded, total) => {
+                        const percent = Math.round((downloaded / total) * 100);
+                        updateProgress(
+                            completedCount + 1,
+                            downloadLinks.length,
+                            failedDownloads.length,
+                            `[${percent}%]`
+                        );
                     }
+                });
 
-                    // Get the complete blob from response
-                    const blob = await response.blob();
-
-                    // Wait to ensure file is fully received
-                    await sleep(500);
-
-                    // Create blob URL and trigger download
-                    const blobUrl = window.URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = blobUrl;
-                    a.download = link.name;
-                    a.style.display = "none";
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-
-                    // Wait for download to fully complete before cleanup
-                    await sleep(2000);
-                    window.URL.revokeObjectURL(blobUrl);
-
+                if (result.success) {
                     completedCount++;
                     console.log(`[CloudDown] ✓ Successfully downloaded (${completedCount}/${downloadLinks.length}): ${link.name}`);
                     return true;
-                } catch (error) {
-                    if (error.name === 'AbortError') {
-                        console.log(`[CloudDown] Download aborted: ${link.name}`);
-                        return false;
-                    }
-
-                    console.error(`[CloudDown] Failed to download ${link.name}:`, error.message);
-
-                    if (retryCount < maxRetries - 1) {
-                        console.log(`[CloudDown] Retrying ${link.name} (${retryCount + 1}/${maxRetries})...`);
-                        await sleep(3000);
-                        return downloadFile(link, retryCount + 1);
-                    }
+                } else {
+                    console.error(`[CloudDown] Failed to download ${link.name}: ${result.error}`);
                     return false;
                 }
             };
@@ -409,7 +378,7 @@
                     updateProgress(completedCount + i + 1, downloadLinks.length, 0, '[重试中]');
 
                     console.log(`[CloudDown] Final retry for: ${link.name}`);
-                    const success = await downloadFile(link, 0); // Reset retry count
+                    const success = await downloadFile(link);
 
                     if (!success) {
                         failedDownloads.push(link);
@@ -512,6 +481,206 @@
 
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function download_(url, filename, options = {}) {
+        const {
+            chunkSize = 5 * 1024 * 1024, // 5MB default chunk size
+            maxConcurrent = 5, // Max concurrent chunk downloads
+            retries = 3, // Retry attempts per chunk
+            signal = null, // AbortSignal for cancellation
+            onProgress = null // Progress callback: (downloaded, total) => {}
+        } = options;
+
+        try {
+            // Step 1: Check if server supports range requests
+            const headResponse = await fetch(url, {
+                method: 'HEAD',
+                mode: 'cors',
+                credentials: 'include',
+                signal
+            });
+
+            if (!headResponse.ok) {
+                console.error(`[download_] HEAD request failed: ${headResponse.status}`);
+                return { success: false, error: `HEAD request failed: ${headResponse.status}` };
+            }
+
+            const acceptRanges = headResponse.headers.get('accept-ranges');
+            const contentLength = parseInt(headResponse.headers.get('content-length') || '0');
+            const supportsRange = acceptRanges === 'bytes' && contentLength > 0;
+
+            let blob;
+            let totalDownloaded = 0;
+
+            // Step 2: Download file (chunked or regular)
+            if (supportsRange && contentLength > chunkSize) {
+                console.log(`[download_] Chunked download: ${filename} (${Math.ceil(contentLength / 1024 / 1024)}MB)`);
+
+                const chunks = [];
+                const totalChunks = Math.ceil(contentLength / chunkSize);
+
+                // Download chunks with concurrency control
+                for (let i = 0; i < totalChunks; i += maxConcurrent) {
+                    const batchSize = Math.min(maxConcurrent, totalChunks - i);
+                    const chunkPromises = [];
+
+                    for (let j = 0; j < batchSize; j++) {
+                        const chunkIndex = i + j;
+                        const start = chunkIndex * chunkSize;
+                        const end = Math.min(start + chunkSize - 1, contentLength - 1);
+
+                        const downloadChunk = async (attempt = 0) => {
+                            try {
+                                const response = await fetch(url, {
+                                    method: 'GET',
+                                    headers: {
+                                        'Range': `bytes=${start}-${end}`
+                                    },
+                                    mode: 'cors',
+                                    credentials: 'include',
+                                    signal
+                                });
+
+                                // Verify Content-Range header
+                                const contentRange = response.headers.get('content-range');
+                                if (response.status !== 206 || !contentRange) {
+                                    throw new Error(`Invalid range response: ${response.status}, Content-Range: ${contentRange}`);
+                                }
+
+                                // Parse and validate Content-Range
+                                const rangeMatch = contentRange.match(/bytes (\d+)-(\d+)\/(\d+)/);
+                                if (!rangeMatch) {
+                                    throw new Error(`Invalid Content-Range format: ${contentRange}`);
+                                }
+
+                                const [, rangeStart, rangeEnd, rangeTotal] = rangeMatch;
+                                if (parseInt(rangeStart) !== start || parseInt(rangeEnd) !== end) {
+                                    throw new Error(`Content-Range mismatch: expected ${start}-${end}, got ${rangeStart}-${rangeEnd}`);
+                                }
+
+                                const chunkBlob = await response.blob();
+                                const actualSize = chunkBlob.size;
+                                const expectedSize = end - start + 1;
+
+                                if (actualSize !== expectedSize) {
+                                    throw new Error(`Chunk size mismatch: expected ${expectedSize}, got ${actualSize}`);
+                                }
+
+                                totalDownloaded += actualSize;
+                                if (onProgress) {
+                                    onProgress(totalDownloaded, contentLength);
+                                }
+
+                                console.log(`[download_] Chunk ${chunkIndex + 1}/${totalChunks} OK (${Math.round(actualSize / 1024)}KB)`);
+                                return { index: chunkIndex, blob: chunkBlob };
+
+                            } catch (error) {
+                                if (attempt < retries - 1) {
+                                    console.log(`[download_] Chunk ${chunkIndex} retry ${attempt + 1}/${retries}: ${error.message}`);
+                                    await sleep(1000 * (attempt + 1)); // Exponential backoff
+                                    return downloadChunk(attempt + 1);
+                                }
+                                throw error;
+                            }
+                        };
+
+                        chunkPromises.push(downloadChunk());
+                    }
+
+                    // Wait for batch completion
+                    try {
+                        const batchResults = await Promise.all(chunkPromises);
+                        batchResults.forEach(result => {
+                            chunks[result.index] = result.blob;
+                        });
+                    } catch (error) {
+                        console.error(`[download_] Batch failed: ${error.message}`);
+                        return { success: false, error: error.message };
+                    }
+                }
+
+                // Merge chunks
+                console.log(`[download_] Merging ${chunks.length} chunks...`);
+                blob = new Blob(chunks, { type: 'application/octet-stream' });
+
+                // Verify final size
+                if (blob.size !== contentLength) {
+                    console.error(`[download_] Size mismatch: expected ${contentLength}, got ${blob.size}`);
+                    return { success: false, error: `Size mismatch: expected ${contentLength}, got ${blob.size}` };
+                }
+
+            } else {
+                // Regular download (no chunking)
+                console.log(`[download_] Regular download: ${filename} (no chunking)`);
+
+                for (let attempt = 0; attempt < retries; attempt++) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'GET',
+                            mode: 'cors',
+                            credentials: 'include',
+                            signal
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+
+                        // Stream with progress
+                        if (response.body && contentLength > 0 && onProgress) {
+                            const reader = response.body.getReader();
+                            const chunks = [];
+
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+
+                                chunks.push(value);
+                                totalDownloaded += value.length;
+                                onProgress(totalDownloaded, contentLength);
+                            }
+
+                            blob = new Blob(chunks, { type: 'application/octet-stream' });
+                        } else {
+                            blob = await response.blob();
+                        }
+
+                        break; // Success, exit retry loop
+
+                    } catch (error) {
+                        if (attempt === retries - 1) {
+                            console.error(`[download_] Download failed after ${retries} attempts: ${error.message}`);
+                            return { success: false, error: error.message };
+                        }
+                        console.log(`[download_] Retry ${attempt + 1}/${retries}: ${error.message}`);
+                        await sleep(1000 * (attempt + 1));
+                    }
+                }
+            }
+
+            // Step 3: Trigger browser download
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = filename;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Cleanup after delay
+            setTimeout(() => {
+                window.URL.revokeObjectURL(blobUrl);
+            }, 5000);
+
+            console.log(`[download_] Success: ${filename} (${Math.round(blob.size / 1024 / 1024 * 100) / 100}MB)`);
+            return { success: true, size: blob.size };
+
+        } catch (error) {
+            console.error(`[download_] Failed: ${filename} - ${error.message}`);
+            return { success: false, error: error.message };
+        }
     }
 
     async function loadAllPages() {
